@@ -251,7 +251,7 @@ def main():
             result = login_user(username, password)
     
             if result == "success":
-                print("\nYou are now logged in.")
+                print(f"\nSuccess! Welcome, {username}. You are now logged in.")
                 print("(In a real application, you would now access the dashboard)")
             elif result == "wrong_password":
                 print("Error: Invalid password.")
