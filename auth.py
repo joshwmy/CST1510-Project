@@ -45,21 +45,6 @@ def verify_password(plain_text_password, hashed_password):
     return bcrypt.checkpw(password_bytes, hash_bytes)
 
 
-# REMOVE LATER, SOME CODE CAN BE REUSED
-# # Test hashing
-# hashed = hash_password(test_password)
-# print(f"Original password: {test_password}")
-# print(f"Hashed password: {hashed}")
-# print(f"Hash length: {len(hashed)} characters")
-
-# # Test verification with correct password
-# is_valid = verify_password(test_password, hashed)
-# print(f"\nVerification with correct password: {is_valid}")
-
-# # Test verification with incorrect password
-# is_invalid = verify_password("WrongPassword", hashed)
-# print(f"Verification with incorrect password: {is_invalid}")
-
 def register_user(username, password):
     '''
     Registers a new user by hashing their password and storing credentials.
@@ -72,26 +57,70 @@ def register_user(username, password):
         bool: True if registration successful, False if username already exists
     '''
     # Check if the username already exists
-    try:
-        with open(USER_DATA_FILE, "r") as file:
-            for line in file:
-                stored_username = line.split(",")[0].strip()
-                if stored_username == username:
-                    return False
-    except FileNotFoundError:
-       # File doesn't exist yet, so no users to check against
-        pass  #  Normal in the beginning, first user being registered
+    if user_exists(username):
+        return False
 
-
-    # Hash password and save
+    # Hash the password and save
     hashed_password = hash_password(password)
     
     with open(USER_DATA_FILE, "a") as file:
         file.write(f"{username},{hashed_password}\n")
     
-    # Append the new user to the file
-    # Format: username,hashed_password
-    with open(USER_DATA_FILE, "a") as file:
-        file.write(f"{username},{hashed_password}\n")
-    
     return True
+
+
+def user_exists(username):
+    """
+    Checks if a username already exists in the user database.
+
+    Args:
+        username (str): The username to check
+
+    Returns:
+        bool: True if the user exists, False otherwise
+    """
+    # Handle the case where the file doesn't exist yet
+    try:
+        # Read the file and check each line for the username
+        with open(USER_DATA_FILE, "r") as file:
+            for line in file:
+                stored_username = line.split(",")[0].strip()
+                if stored_username == username:
+                    return True
+    except FileNotFoundError:
+        # File doesn't exist yet, so no users exist
+        return False
+    
+    return False
+
+
+def login_user(username, password):
+    '''
+    Authenticates a user by verifying their username and password.
+
+    Args:
+        username (str): The username to authenticate
+        password (str): The plaintext password to verify
+
+    Returns:
+        bool: True if authentication successful, False otherwise
+    '''
+    try:
+        with open(USER_DATA_FILE, "r") as file:
+            for line in file:
+                parts = line.strip().split(",")
+                if len(parts) == 2:
+                    stored_username, stored_hash = parts
+                    
+                    if stored_username == username:
+                        # Verify the password using bcrypt function
+                        return verify_password(password, stored_hash)
+    
+    except FileNotFoundError:
+        # No users registered yet
+        return False
+    
+    # Username was not found
+    return False
+
+
