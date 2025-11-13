@@ -1,0 +1,4 @@
+josh,$2b$12$dT5.oUbUXrsg2GYjs49koea6/WGkPapvCO1PIqUENtm3QyfOS3j3y,user
+admin,$2b$12$p.i2j3KMAwDLjbd9dp2dPO4/gTdq0bdCidAlbhfaIEZicdlzRxYPa,user
+bob,$2b$12$97Z0XLx.CCgYAfCkXQE9.Ov.vVyOgT.HwaKtv8N0zSoh57XxsD8we,user
+alice,$2b$12$BQ/sjafMJolSTx4SwzMKjetwHuHG1YLEfT07toSDE9R3fEY74t3N2,user
