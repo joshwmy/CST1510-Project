@@ -1,7 +1,9 @@
 import bcrypt
-USER_DATA_FILE = "users.txt"
+# USER_DATA_FILE = "users.txt"  - migration completed
 from app.data.db import connect_database
+from app.data.users import get_user_by_username, insert_user
 import sqlite3
+from pathlib import Path
 
 def hash_password(plain_text_password):
     '''
@@ -56,29 +58,18 @@ def register_user(username, password, role="user"):
     Returns:
         bool: True if registration successful, False if username already exists
     '''
-    conn = connect_database()
     try:
-        # Defining the cursor for future use
-        cur = conn.cursor()
-        
-        # Check if username exists
-        cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-        if cur.fetchone():
+        # Check if username exists using the function from users.py
+        if get_user_by_username(username):
             return False
         
-        # Hash password and insert new user into db
+        # Hash password and insert new user into db using function from users.py
         hashed_password = hash_password(password)
-        cur.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-            (username, hashed_password, role)
-        )
-        conn.commit()
+        insert_user(username, hashed_password, role)
         return True
     except sqlite3.Error as e:
         print(f"Database error during registration: {e}")
         return False
-    finally:    # Always closes connection, whether success or error
-        conn.close()
 
 def user_exists(username):
     """
@@ -90,17 +81,11 @@ def user_exists(username):
     Returns:
         bool: True if the user exists, False otherwise
     """
-    conn = connect_database()
-    # try except used if the file doesn't exist yet
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-        return cur.fetchone() is not None
+        return get_user_by_username(username) is not None
     except sqlite3.Error as e:
         print(f"Database error checking user: {e}")
         return False
-    finally:
-        conn.close()
 
 def login_user(username, password):
     '''
@@ -115,19 +100,17 @@ def login_user(username, password):
             - status (str): One of "success", "wrong_password", or "user_not_found".
             - role (str or None): The user's role if authentication succeeds, otherwise `None`.
     '''
-    conn = connect_database()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT password_hash, role FROM users WHERE username = ?", 
-            (username,)
-        )
-        row = cur.fetchone()
+        # Get user data using function from users.py
+        user = get_user_by_username(username)
         
-        if not row:
+        if not user:
             return "user_not_found", None
             
-        stored_hash, stored_role = row
+        # Extract password_hash and role from user tuple
+        # The tuple structure is: (id, username, password_hash, role)
+        stored_hash = user[2]  # password_hash is at index 2
+        stored_role = user[3]  # role is at index 3
         
         # Verify the password using bcrypt function
         if verify_password(password, stored_hash):
@@ -138,8 +121,6 @@ def login_user(username, password):
     except sqlite3.Error as e:
         print(f"Database error during login: {e}")
         return "user_not_found", None
-    finally:
-        conn.close()
 
 def migrate_users_from_file(conn, filepath="DATA/users.txt"):
     """
@@ -148,39 +129,31 @@ def migrate_users_from_file(conn, filepath="DATA/users.txt"):
     Args:
         conn: Database connection
         filepath: Path to users.txt file
-    """
+    """ 
+    filepath = Path(filepath)
     if not filepath.exists():
         print(f"File not found: {filepath}")
         print("No users to migrate.")
         return
-    
-    cursor = conn.cursor()
+
     migrated_count = 0
-    
-    with open(filepath, 'r') as f:
+    with filepath.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            
-            # Parse line: username,password_hash
             parts = line.split(',')
             if len(parts) >= 2:
-                username = parts[0]
-                password_hash = parts[1]
-                
-                # Insert user (ignore if already exists)
+                username = parts[0].strip()
+                password_hash = parts[1].strip()
                 try:
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-                        (username, password_hash, 'user')
-                    )
-                    if cursor.rowcount > 0:
+                    # Use the functions from users.py
+                    if not get_user_by_username(username):
+                        insert_user(username, password_hash, 'user')
                         migrated_count += 1
                 except sqlite3.Error as e:
                     print(f"Error migrating user {username}: {e}")
-    
-    conn.commit()
+
     print(f"Migrated {migrated_count} users from {filepath.name}")
 
 def validate_username(username):
