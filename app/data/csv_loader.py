@@ -1,21 +1,22 @@
 """
--- CSV loader -- 
+CSV loader
+
 Features:
-- Allowed table validation (this will prevent accidental writes)
+- Allowed table validation (prevents accidental writes)
 - Header validation against DB table columns
 - Batch inserts via executemany() inside a transaction
 - Optional clearing of table before loading
+- Simple type coercion for common numeric/date columns
 - Verification helper to count rows
 """
 
 from pathlib import Path
 import csv
 import sqlite3
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 from app.data.db import connect_database
-import pandas as pd
 
-# Begin by defining the allowed target tables to avoid accidental SQL injection via table names
+# start by defining the allowed target tables to avoid accidental SQL injection via table names
 _ALLOWED_TABLES = {"cyber_incidents", "datasets_metadata", "it_tickets", "users"}
 
 
@@ -29,7 +30,70 @@ def _get_table_columns(conn: sqlite3.Connection, table_name: str) -> List[str]:
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(%s)" % table_name)  # table name safe after validation
     rows = cur.fetchall()
-    return [row[1] for row in rows]  # row[1] is column name
+    return [row[1] for row in rows]  # row[1] = column name
+
+
+# --- coercion helpers ---
+
+def _normalize_date(d: str) -> str:
+    """Conerts a few common date formats and return ISO YYYY-MM-DD.
+
+    If nothing matches, return the original string so we don't crash on odd
+    inputs. It prints a warning when normalization fails.
+    """
+    from datetime import datetime
+    d = (d or "").strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(d, fmt).date().isoformat()
+        except Exception:
+            pass
+    # nothing matched — return original (caller may accept it)
+    return d
+
+
+def _coerce_value(col: str, raw: Optional[str]) -> Any:
+    """Coerce a raw CSV string into an appropriate Python type.
+
+    This is intentionally simple and based on expected column names in this
+    project. If coercion fails we return the original string and print a
+    gentle warning. That way the loader is helpful, not brittle.
+    """
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if raw == "":
+        return None
+
+    # known-int columns
+    if col in ("record_count",):
+        try:
+            return int(raw)
+        except ValueError:
+            try:
+                return int(float(raw))
+            except Exception:
+                print(f"[csv_loader] Warning: could not convert {col}={raw!r} to int; leaving as text")
+                return raw
+
+    # known-float columns
+    if col in ("file_size_mb",):
+        try:
+            return float(raw)
+        except ValueError:
+            print(f"[csv_loader] Warning: could not convert {col}={raw!r} to float; leaving as text")
+            return raw
+
+    # date-like columns
+    if col in ("created_date", "resolved_date", "last_updated", "upload_date", "date"):
+        normalized = _normalize_date(raw)
+        if normalized != raw:
+            return normalized
+        # if normalization didn't change the value, return normalized anyway
+        return normalized
+
+    # default: return the cleaned string
+    return raw
 
 
 def load_csv_to_table(csv_file_path: str,
@@ -39,14 +103,8 @@ def load_csv_to_table(csv_file_path: str,
     """
     Load data from a CSV file into a SQLite table using a single transaction and executemany.
 
-    Args:
-        csv_file_path: path to CSV file
-        table_name: target DB table (must be in _ALLOWED_TABLES)
-        db_path: optional custom DB path forwarded to connect_database()
-        clear_table: if True, DELETE FROM table before inserting
-
-    Returns:
-        int: number of rows inserted
+    This update performs coercion so numeric columns become numbers
+    and date columns are normalized, which avoids many subtle bugs later on.
     """
     _validate_table_name(table_name)
     csv_path = Path(csv_file_path)
@@ -55,22 +113,21 @@ def load_csv_to_table(csv_file_path: str,
         print(f"[csv_loader] CSV file not found: {csv_path}")
         return 0
 
-    conn = connect_database(db_path)  # your connect_database accepts optional path
+    conn = connect_database(db_path)  # connect_database can accept optional path
     try:
-        # Validate and fetch DB columns
+        # fetch DB columns and verify
         db_cols = _get_table_columns(conn, table_name)
         if not db_cols:
             raise ValueError(f"Table {table_name!r} has no columns or does not exist.")
 
         with csv_path.open(newline="", encoding="utf-8") as fh:
             reader = csv.DictReader(fh)
-            csv_cols = reader.fieldnames
+            csv_cols = reader.fieldnames or []
             if not csv_cols:
                 print(f"[csv_loader] No header found in CSV: {csv_path}")
                 return 0
 
-            # Ensure CSV columns are a subset of table columns OR exactly match required insert columns
-            # We'll insert only columns that are present in both (in DB order) to be safe.
+            # keep columns in DB order, only those present in the CSV
             insert_cols = [col for col in db_cols if col in csv_cols]
             if not insert_cols:
                 raise ValueError("No overlapping columns between CSV and table columns: "
@@ -80,26 +137,31 @@ def load_csv_to_table(csv_file_path: str,
             col_list_sql = ", ".join(insert_cols)
             insert_sql = f"INSERT INTO {table_name} ({col_list_sql}) VALUES ({placeholders})"
 
-            # Optionally clear table
             cur = conn.cursor()
             if clear_table:
                 cur.execute(f"DELETE FROM {table_name}")
                 conn.commit()
 
-            # Prepare batch insert
             batch: List[Tuple] = []
             rows = 0
             for row in reader:
-                # build values tuple in the same order as insert_cols
-                values = tuple((row.get(c) if row.get(c, "") != "" else None) for c in insert_cols)
+                cleaned = {}
+                for c in insert_cols:
+                    raw = row.get(c, None)
+                    try:
+                        cleaned[c] = _coerce_value(c, raw)
+                    except Exception as e:
+                        print(f"[csv_loader] Warning: failed to coerce column {c} value {raw!r}: {e}")
+                        cleaned[c] = raw
+
+                values = tuple(cleaned[c] for c in insert_cols)
                 batch.append(values)
-                # flush in reasonable batches to keep memory usage low
+
                 if len(batch) >= 500:
                     cur.executemany(insert_sql, batch)
                     rows += len(batch)
                     batch.clear()
 
-            # final flush
             if batch:
                 cur.executemany(insert_sql, batch)
                 rows += len(batch)
@@ -121,8 +183,7 @@ def load_csv_to_table(csv_file_path: str,
 
 
 def load_all_csv_data(data_dir: str = "DATA", db_path: Optional[str] = None, clear_table: bool = True):
-    """
-    Load the expected CSVs into their respective tables.
+    """Load the expected CSVs into their respective tables.
 
     Returns:
         dict: mapping table_name -> rows_loaded
@@ -160,7 +221,7 @@ def count_table_records(table_name: str, db_path: Optional[str] = None) -> int:
 
 
 def verify_data_loading(db_path: Optional[str] = None):
-    """Print counts for the three Week-8 tables."""
+    """Print counts for the three main tables so we can check loading worked."""
     tables = ["cyber_incidents", "datasets_metadata", "it_tickets"]
     print("\n[csv_loader] Verifying data loading...")
     for t in tables:

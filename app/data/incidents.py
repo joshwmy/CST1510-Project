@@ -1,20 +1,20 @@
 """
-Data-layer module for cyber_incidents table operations.
-Provides CRUD operations, filtering, and analytics.
+Data module for cyber_incidents table operations. Provides CRUD operations, filtering, and analytics.
+Uses csv_loader functions to reduce database connections.
 """
 
 import sqlite3
 from typing import Optional, List, Dict, Any
-
-import pandas as pd
 from app.data.db import connect_database
+from app.data.csv_loader import load_csv_to_table, count_table_records
+import pandas as pd
 
-# Valid value sets
+# established sets of allowed values — keeps inputs tidy and predictable
 VALID_SEVERITIES = ["Low", "Medium", "High", "Critical"]
 VALID_STATUSES = ["Open", "In Progress", "Resolved", "Closed"]
 
 
-# CREATE SECTION    
+# ---------------------- CREATE ----------------------
 
 def create_incident(
     date: str,
@@ -25,82 +25,84 @@ def create_incident(
     reported_by: str = ""
 ) -> int:
     """
-    Insert a new incident into the database.
-    Returns the new incident's ID or -1 on failure.
+    Add a new incident and return its id. On error return -1.
+
+    This function checks the basics first (makes sure required fields are
+    present and that severity/status are recognized), then inserts the row.
     """
-    # Validation; if wrong variables are enetered
+    # quick input checks so we fail fast and loud if something is wrong
     if not all([date, incident_type, severity, status]):
-        raise ValueError("date, incident_type, severity, and status are required.")
+        raise ValueError("date, incident_type, severity and status are required")
 
     if severity not in VALID_SEVERITIES:
-        raise ValueError(f"Invalid severity. Must be: {', '.join(VALID_SEVERITIES)}")
+        raise ValueError(f"Invalid severity — must be one of: {', '.join(VALID_SEVERITIES)}")
 
     if status not in VALID_STATUSES:
-        raise ValueError(f"Invalid status. Must be: {', '.join(VALID_STATUSES)}")
+        raise ValueError(f"Invalid status — must be one of: {', '.join(VALID_STATUSES)}")
 
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO cyber_incidents
             (date, incident_type, severity, status, description, reported_by)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (date, incident_type, severity, status, description, reported_by))
-
-        incident_id = cur.lastrowid
+            """,
+            (date, incident_type, severity, status, description, reported_by),
+        )
+        new_id = cur.lastrowid
         conn.commit()
-        return incident_id
+        return new_id
 
-    except sqlite3.Error as e:
+    except sqlite3.Error as err:
         conn.rollback()
-        print(f"[incidents] Error creating incident: {e}")
+        # print a short, clear message so logs are readable
+        print(f"[incidents] Error creating incident: {err}")
         return -1
+
     finally:
         conn.close()
 
 
-# READ SECTION (SINGLE)
+# ---------------------- READ (single) ----------------------
 
 def get_incident(incident_id: int) -> Optional[Dict[str, Any]]:
-    """Return a single incident as a dict, or None if not found."""
+    """Return a single incident as a dict, or None if it doesn't exist."""
     conn = connect_database()
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM cyber_incidents WHERE id = ?", (incident_id,))
         row = cur.fetchone()
         return dict(row) if row else None
-    except sqlite3.Error as e:
-        print(f"[incidents] Error retrieving incident {incident_id}: {e}")
+    except sqlite3.Error as err:
+        print(f"[incidents] Error fetching incident {incident_id}: {err}")
         return None
     finally:
         conn.close()
 
 
-# READ SECTION (ALL)
+# ---------------------- READ (all) ----------------------
 
 def get_all_incidents(as_dataframe: bool = False):
-    """
-    Return all incidents sorted by date (newest first).
-    """
+    """Return every incident, newest first. Use a DataFrame if you like."""
     conn = connect_database()
     try:
         if as_dataframe:
-            return pd.read_sql_query(
-                "SELECT * FROM cyber_incidents ORDER BY date DESC", conn
-            )
+            return pd.read_sql_query("SELECT * FROM cyber_incidents ORDER BY date DESC", conn)
 
         cur = conn.cursor()
         cur.execute("SELECT * FROM cyber_incidents ORDER BY date DESC")
-        return [dict(row) for row in cur.fetchall()]
+        return [dict(r) for r in cur.fetchall()]
 
-    except sqlite3.Error as e:
-        print(f"[incidents] Error reading all incidents: {e}")
+    except sqlite3.Error as err:
+        print(f"[incidents] Error reading incidents: {err}")
         return pd.DataFrame() if as_dataframe else []
     finally:
         conn.close()
 
 
-# READ SCETION (FILTERED)
+# ---------------------- READ (filtered) ----------------------
 
 def get_incidents_by_filters(
     severity: Optional[str] = None,
@@ -110,11 +112,11 @@ def get_incidents_by_filters(
     date_to: Optional[str] = None,
     as_dataframe: bool = False
 ):
-    """Retrieve incidents based on a set of optional filters."""
+    """Fetch incidents using optional filters. Returns list[dict] or DataFrame."""
     conn = connect_database()
     try:
         query = "SELECT * FROM cyber_incidents WHERE 1=1"
-        params = []
+        params: List[Any] = []
 
         if severity:
             query += " AND severity = ?"
@@ -139,16 +141,16 @@ def get_incidents_by_filters(
 
         cur = conn.cursor()
         cur.execute(query, params)
-        return [dict(row) for row in cur.fetchall()]
+        return [dict(r) for r in cur.fetchall()]
 
-    except sqlite3.Error as e:
-        print(f"[incidents] Error filtering incidents: {e}")
+    except sqlite3.Error as err:
+        print(f"[incidents] Error filtering incidents: {err}")
         return pd.DataFrame() if as_dataframe else []
     finally:
         conn.close()
 
 
-# UPDATE SECTION
+# ---------------------- UPDATE ----------------------
 
 def update_incident(
     incident_id: int,
@@ -159,12 +161,9 @@ def update_incident(
     description: Optional[str] = None,
     reported_by: Optional[str] = None
 ) -> bool:
-    """
-    Update any combination of fields for an incident.
-    Returns True on success.
-    """
-    updates = []
-    params = []
+    """Update fields for an incident. Returns True if something changed."""
+    updates: List[str] = []
+    params: List[Any] = []
 
     if date is not None:
         updates.append("date = ?")
@@ -174,12 +173,12 @@ def update_incident(
         params.append(incident_type)
     if severity is not None:
         if severity not in VALID_SEVERITIES:
-            raise ValueError(f"Invalid severity. Must be: {', '.join(VALID_SEVERITIES)}")
+            raise ValueError(f"Invalid severity — must be one of: {', '.join(VALID_SEVERITIES)}")
         updates.append("severity = ?")
         params.append(severity)
     if status is not None:
         if status not in VALID_STATUSES:
-            raise ValueError(f"Invalid status. Must be: {', '.join(VALID_STATUSES)}")
+            raise ValueError(f"Invalid status — must be one of: {', '.join(VALID_STATUSES)}")
         updates.append("status = ?")
         params.append(status)
     if description is not None:
@@ -190,9 +189,10 @@ def update_incident(
         params.append(reported_by)
 
     if not updates:
+        # nothing to update — the caller didn't pass any fields
         return False
 
-    params.append(incident_id)  # WHERE id = ?
+    params.append(incident_id)
 
     conn = connect_database()
     try:
@@ -202,94 +202,115 @@ def update_incident(
         conn.commit()
         return cur.rowcount > 0
 
-    except sqlite3.Error as e:
+    except sqlite3.Error as err:
         conn.rollback()
-        print(f"[incidents] Error updating incident {incident_id}: {e}")
+        print(f"[incidents] Error updating incident {incident_id}: {err}")
         return False
+
     finally:
         conn.close()
 
 
-# DELETE SECTION
+# ---------------------- DELETE ----------------------
 
 def delete_incident(incident_id: int) -> bool:
-    """Delete an incident and return True if deletion was successful."""
+    """Delete an incident row. Returns True if a row was removed."""
     conn = connect_database()
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM cyber_incidents WHERE id = ?", (incident_id,))
         conn.commit()
         return cur.rowcount > 0
-
-    except sqlite3.Error as e:
+    except sqlite3.Error as err:
         conn.rollback()
-        print(f"[incidents] Error deleting incident {incident_id}: {e}")
+        print(f"[incidents] Error deleting incident {incident_id}: {err}")
         return False
     finally:
         conn.close()
 
 
-# ANALYTICS
+# ---------------------- BULK (CSV loader) ----------------------
+
+def load_incidents_from_csv(csv_path: str, clear_table: bool = True) -> int:
+    """Load incidents from CSV using the shared csv_loader (this keeps the DB tidy)."""
+    return load_csv_to_table(csv_path, "cyber_incidents", clear_table=clear_table)
+
+
+def get_total_incidents_count() -> int:
+    """Return the total number of incidents using the csv loader helper."""
+    return count_table_records("cyber_incidents")
+
+
+# ---------------------- ANALYTICS ----------------------
+
 def get_incident_count_by_severity() -> Dict[str, int]:
+    """Count incidents grouped by severity."""
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("""
-            SELECT severity, COUNT(*) AS count
-            FROM cyber_incidents
-            GROUP BY severity
-        """)
-        return {row["severity"]: row["count"] for row in cur.fetchall()}
+        cur.execute("SELECT severity, COUNT(*) AS count FROM cyber_incidents GROUP BY severity")
+        return {row['severity']: row['count'] for row in cur.fetchall()}
     finally:
         conn.close()
 
 
 def get_incident_count_by_status() -> Dict[str, int]:
+    """Count incidents grouped by status."""
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("""
-            SELECT status, COUNT(*) AS count
-            FROM cyber_incidents
-            GROUP BY status
-        """)
-        return {row["status"]: row["count"] for row in cur.fetchall()}
+        cur.execute("SELECT status, COUNT(*) AS count FROM cyber_incidents GROUP BY status")
+        return {row['status']: row['count'] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def get_all_incident_analytics() -> Dict[str, Any]:
+    """Return a small analytics bundle in one database connection."""
+    conn = connect_database()
+    try:
+        cur = conn.cursor()
+        stats: Dict[str, Any] = {}
+
+        cur.execute("SELECT COUNT(*) as total FROM cyber_incidents")
+        stats['total_incidents'] = cur.fetchone()['total']
+
+        cur.execute("SELECT COUNT(*) as open_count FROM cyber_incidents WHERE status IN ('Open', 'In Progress')")
+        stats['open_incidents'] = cur.fetchone()['open_count']
+
+        cur.execute("SELECT severity, COUNT(*) as count FROM cyber_incidents GROUP BY severity")
+        stats['by_severity'] = {r['severity']: r['count'] for r in cur.fetchall()}
+
+        cur.execute("SELECT status, COUNT(*) as count FROM cyber_incidents GROUP BY status")
+        stats['by_status'] = {r['status']: r['count'] for r in cur.fetchall()}
+
+        return stats
+
     finally:
         conn.close()
 
 
 def get_open_incidents_count() -> int:
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT COUNT(*) AS count
-            FROM cyber_incidents
-            WHERE status IN ('Open', 'In Progress')
-        """)
-        row = cur.fetchone()
-        return row["count"]
-    finally:
-        conn.close()
+    """Return the number of open incidents (delegates to analytics helper)."""
+    return get_all_incident_analytics()['open_incidents']
 
 
 def get_recent_incidents(limit: int = 10) -> List[Dict[str, Any]]:
+    """Return recent incidents ordered by date desc."""
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("""
-            SELECT * FROM cyber_incidents
-            ORDER BY date DESC
-            LIMIT ?
-        """, (limit,))
-        return [dict(row) for row in cur.fetchall()]
+        cur.execute("SELECT * FROM cyber_incidents ORDER BY date DESC LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
 
-# self test; this is only for a demo
+# ---------------------- SELF TEST ----------------------
+
 def _test_incidents_module():
-    print("Running incidents module test...")
+    """Small manual test to run from the command line."""
+    print("incidents module quick test")
 
     inc_id = create_incident(
         date="2024-01-01",
@@ -301,17 +322,11 @@ def _test_incidents_module():
     )
     print("Created incident:", inc_id)
 
-    print("Fetching incident:")
-    print(get_incident(inc_id))
-
-    print("Updating incident:")
-    print(update_incident(inc_id, status="Resolved"))
-
-    print("Counts by severity:")
-    print(get_incident_count_by_severity())
-
-    print("Deleting incident:")
-    print(delete_incident(inc_id))
+    print("Fetch:", get_incident(inc_id))
+    print("Total incidents count (csv loader):", get_total_incidents_count())
+    print("Analytics bundle:", get_all_incident_analytics())
+    print("Update:", update_incident(inc_id, status="Resolved"))
+    print("Delete:", delete_incident(inc_id))
 
 
 if __name__ == "__main__":
