@@ -1,19 +1,50 @@
-# python -m .test
+# test.py 
+from app.data.schema import init_schema
+from app.data.csv_loader import load_all_csv_data, verify_data_loading
+
+print("Starting database setup...")
+init_schema()
+print("Schema created!")
+load_all_csv_data()
+print("Data loaded!")
+verify_data_loading()
+print("All done! ")
+
+
+import os
+from app.data.schema import init_schema
+from app.data.csv_loader import load_all_csv_data, verify_data_loading
+from app.services.user_service import migrate_users_from_file
 from app.data.db import connect_database
 
-# Verify users were migrated
-conn = connect_database()
-cursor = conn.cursor()
+def main():
+    print(" Initializing database schema...")
+    
+    db_path = "DATA/intelligence_platform.db"
+    if os.path.exists(db_path):
+        print("📁 Removing existing database...")
+        os.remove(db_path)
+    
+    # Initialize schema
+    print(" Creating tables...")
+    init_schema()
+    
+    # Load sample data
+    print("Loading CSV data...")
+    results = load_all_csv_data()
+    
+    # Migrate users from users.txt
+    print("👥 Migrating users from users.txt...")
+    conn = connect_database()
+    migrate_users_from_file(conn)
+    conn.close()
+    
+    # Verify loading
+    print("Verifying data...")
+    verify_data_loading()
+    
+    print("Database setup complete!")
+    print(f"Results: {results}")
 
-# Query all users
-cursor.execute("SELECT id, username, role FROM users")
-users = cursor.fetchall()
-
-print(" Users in database:")
-print(f"{'ID':<5} {'Username':<15} {'Role':<10}")
-print("-" * 35)
-for user in users:
-    print(f"{user[0]:<5} {user[1]:<15} {user[2]:<10}")
-
-print(f"\nTotal users: {len(users)}")
-conn.close()
+if __name__ == "__main__":
+    main()

@@ -17,7 +17,7 @@ VALID_STATUSES = ["Open", "In Progress", "Resolved", "Closed"]
 # ---------------------- CREATE ----------------------
 
 def create_incident(
-    date: str,
+    timestamp: str,
     incident_type: str,
     severity: str,
     status: str,
@@ -31,8 +31,8 @@ def create_incident(
     present and that severity/status are recognized), then inserts the row.
     """
     # quick input checks so we fail fast and loud if something is wrong
-    if not all([date, incident_type, severity, status]):
-        raise ValueError("date, incident_type, severity and status are required")
+    if not all([timestamp, incident_type, severity, status]):
+        raise ValueError("timestamp, incident_type, severity and status are required")
 
     if severity not in VALID_SEVERITIES:
         raise ValueError(f"Invalid severity — must be one of: {', '.join(VALID_SEVERITIES)}")
@@ -46,10 +46,10 @@ def create_incident(
         cur.execute(
             """
             INSERT INTO cyber_incidents
-            (date, incident_type, severity, status, description, reported_by)
+            (timestamp, incident_type, severity, status, description, reported_by)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (date, incident_type, severity, status, description, reported_by),
+            (timestamp, incident_type, severity, status, description, reported_by),
         )
         new_id = cur.lastrowid
         conn.commit()
@@ -89,10 +89,10 @@ def get_all_incidents(as_dataframe: bool = False):
     conn = connect_database()
     try:
         if as_dataframe:
-            return pd.read_sql_query("SELECT * FROM cyber_incidents ORDER BY date DESC", conn)
+            return pd.read_sql_query("SELECT * FROM cyber_incidents ORDER BY timestamp DESC", conn)
 
         cur = conn.cursor()
-        cur.execute("SELECT * FROM cyber_incidents ORDER BY date DESC")
+        cur.execute("SELECT * FROM cyber_incidents ORDER BY timestamp DESC")
         return [dict(r) for r in cur.fetchall()]
 
     except sqlite3.Error as err:
@@ -128,13 +128,13 @@ def get_incidents_by_filters(
             query += " AND incident_type = ?"
             params.append(incident_type)
         if date_from:
-            query += " AND date >= ?"
+            query += " AND timestamp >= ?"
             params.append(date_from)
         if date_to:
-            query += " AND date <= ?"
+            query += " AND timestamp <= ?"
             params.append(date_to)
 
-        query += " ORDER BY date DESC"
+        query += " ORDER BY timestamp DESC"
 
         if as_dataframe:
             return pd.read_sql_query(query, conn, params=params)
@@ -154,7 +154,7 @@ def get_incidents_by_filters(
 
 def update_incident(
     incident_id: int,
-    date: Optional[str] = None,
+    timestamp: Optional[str] = None,
     incident_type: Optional[str] = None,
     severity: Optional[str] = None,
     status: Optional[str] = None,
@@ -165,9 +165,9 @@ def update_incident(
     updates: List[str] = []
     params: List[Any] = []
 
-    if date is not None:
-        updates.append("date = ?")
-        params.append(date)
+    if timestamp is not None:
+        updates.append("timestamp = ?")
+        params.append(timestamp)
     if incident_type is not None:
         updates.append("incident_type = ?")
         params.append(incident_type)
@@ -296,11 +296,11 @@ def get_open_incidents_count() -> int:
 
 
 def get_recent_incidents(limit: int = 10) -> List[Dict[str, Any]]:
-    """Return recent incidents ordered by date desc."""
+    """Return recent incidents ordered by timestamp desc."""
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM cyber_incidents ORDER BY date DESC LIMIT ?", (limit,))
+        cur.execute("SELECT * FROM cyber_incidents ORDER BY timestamp DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -313,7 +313,7 @@ def _test_incidents_module():
     print("incidents module quick test")
 
     inc_id = create_incident(
-        date="2024-01-01",
+        timestamp="2024-01-01",
         incident_type="Phishing",
         severity="High",
         status="Open",

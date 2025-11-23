@@ -1,10 +1,21 @@
 import bcrypt
 # USER_DATA_FILE = "users.txt"  - migration completed
 from app.data.db import connect_database
-from app.data.users import get_user_by_username, insert_user
+from app.data.users import get_user_by_username, insert_user, update_user
 import sqlite3
+import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional, Tuple
 
+# Default Settings
+LOCK_THRESHOLD = 3      # it will lock after 3 failed attempts
+LOCK_MINUTES = 15
+SESSION_HOURS = 24     # Session will last for 24 hours
+
+# -------------
+# Password functions
+# --------------
 def hash_password(plain_text_password):
     '''
     Hashes a password using bcrypt with automatic salt generation.
@@ -46,6 +57,9 @@ def verify_password(plain_text_password, hashed_password):
     # bcrypt.checkpw() to verify the password (if they match)
     return bcrypt.checkpw(password_bytes, hash_bytes)
 
+# ---------------
+# Registration
+# ----------------
 def register_user(username, password, role="user"):
     '''
     Registers a new user by hashing their password and storing credentials.
@@ -71,6 +85,118 @@ def register_user(username, password, role="user"):
         print(f"Database error during registration: {e}")
         return False
 
+# --------------
+# Session management
+# -------------------
+def create_session(username: str, hours: int = SESSION_HOURS) -> str:
+    """
+    Creates a session token for user.
+    Returns the token string.
+    """
+    token = secrets.token_urlsafe(32)
+    created_at = datetime.now().isoformat()
+    expires_at = (datetime.now() + timedelta(hours=hours)).isoformat()
+
+    conn = connect_database()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sessions (username, token, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (username, token, created_at, expires_at),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def get_session(token: str) -> Optional[dict]:
+    """
+    Check if session is valid.
+    Returns session data if valid, None if expired or missing.
+    """
+    conn = connect_database()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sessions WHERE token = ?", (token,))
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        # Check if expired
+        expires_at = row["expires_at"] if "expires_at" in row.keys() else row[4]
+        if expires_at:
+            exp_time = datetime.fromisoformat(expires_at)
+            if exp_time < datetime.now():
+                # Delete expired session
+                cur.execute("DELETE FROM sessions WHERE token = ?", (token,))
+                conn.commit()
+                return None
+
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def invalidate_session(token: str) -> None:
+    """Remove a session (logout)"""
+    conn = connect_database()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        conn.commit()
+    finally:
+        conn.close()
+
+# --------------------
+# Account lock 
+# -------------------
+def is_account_locked(username: str) -> bool:
+    """Checks if account is locked; it uses function from users.py"""
+    user = get_user_by_username(username)
+    if not user:
+        return False
+
+    locked_until = user["locked_until"] if "locked_until" in user.keys() else user[5]
+    
+    if not locked_until:
+        return False
+
+    # Check if lock time has passed
+    lock_time = datetime.fromisoformat(locked_until)
+    if datetime.now() < lock_time:
+        return True
+    else:
+        # Lock expired, clear it
+        update_user(username, failed_attempts=0, locked_until=None)
+        return False
+
+
+def record_failed_attempt(username: str) -> None:
+    """Record failed attempts"""
+    user = get_user_by_username(username)
+    if not user:
+        return
+
+    failed = user["failed_attempts"] if "failed_attempts" in user.keys() else user[4]
+    new_attempts = (failed or 0) + 1
+
+    if new_attempts >= LOCK_THRESHOLD:
+        # Lock account
+        lock_until = (datetime.now() + timedelta(minutes=LOCK_MINUTES)).isoformat()
+        update_user(username, failed_attempts=new_attempts, locked_until=lock_until)
+    else:
+        update_user(username, failed_attempts=new_attempts)
+
+
+def clear_lock(username: str) -> None:
+    """Reset failed attempts."""
+    update_user(username, failed_attempts=0, locked_until=None)
+
+# --------------
+# Login
+# ------------------
+
 def user_exists(username):
     """
     Checks if a username already exists in the user database.
@@ -89,39 +215,60 @@ def user_exists(username):
 
 def login_user(username, password):
     '''
-    Authenticates a user by verifying their username and password.
+    Authenticates a user by verifying their username and password. If the wrong password is input 3 times, the user will be locked out for 5 minutes
+    until next attempt.
 
     Args:
         username (str): The username to authenticate
         password (str): The plaintext password to verify
 
     Returns:
-       tuple: A pair (status, role) where:
+       tuple, where:
             - status (str): One of "success", "wrong_password", or "user_not_found".
             - role (str or None): The user's role if authentication succeeds, otherwise `None`.
+            - token (str or None): string session token if login worked, otherwise None
     '''
     try:
         # Get user data using function from users.py
-        user = get_user_by_username(username)
+        user = get_user_by_username(username)       # connection no1
         
         if not user:
-            return "user_not_found", None
-            
+            return "user_not_found", None, None
+        
+        # Check if the account is locked
+        locked_until = user["locked_until"] if "locked_until" in user.keys() else user[5]
+        if locked_until:
+            lock_time = datetime.fromisoformat(locked_until)
+            if datetime.now() < lock_time:
+                return "locked", None, None
+            else:
+                # Lock expired, clear it
+                clear_lock(username)
+
         # Extract password_hash and role from user tuple
         # The tuple structure is: (id, username, password_hash, role)
-        stored_hash = user[2]  # password_hash is at index 2
-        stored_role = user[3]  # role is at index 3
+        stored_hash = user["password_hash"] if "password_hash" in user.keys() else user[2]      # password_hash is at index 2
+        stored_role = user["role"] if "role" in user.keys() else user[3]                    # role is at index 3
         
         # Verify the password using bcrypt function
         if verify_password(password, stored_hash):
-            return "success", stored_role
+            # when success; clear lock and create session
+            clear_lock(username)  # Connection no 2
+            token = create_session(username)  # Connection no3 (sessions table)
+            return "success", stored_role, token
         else:
-            return "wrong_password", None
+            # when incorrect; record attempt 
+            record_failed_attempt(username)  # Connection no2
+            return "wrong_password", None, None
+
             
     except sqlite3.Error as e:
         print(f"Database error during login: {e}")
-        return "user_not_found", None
+        return "user_not_found", None, None
 
+# ------------------
+# Migration to SQL (not needed anymore, but keeping code to show)
+# --------------------
 def migrate_users_from_file(conn, filepath="DATA/users.txt"):
     """
     Migrate users from users.txt to the database.
@@ -147,7 +294,7 @@ def migrate_users_from_file(conn, filepath="DATA/users.txt"):
                 username = parts[0].strip()
                 password_hash = parts[1].strip()
                 try:
-                    # Use the functions from users.py
+                    # Using the functions from users.py
                     if not get_user_by_username(username):
                         insert_user(username, password_hash, 'user')
                         migrated_count += 1
@@ -156,6 +303,9 @@ def migrate_users_from_file(conn, filepath="DATA/users.txt"):
 
     print(f"Migrated {migrated_count} users from {filepath.name}")
 
+# ------------------
+# Validation
+# ---------------------
 def validate_username(username):
     '''
     Validates username format.
@@ -256,105 +406,4 @@ def check_password_strength(password):
         return "Medium"
     else:
         return "Strong"
-
-def display_menu():
-    """
-    Displays the main menu options.
-    """
-    print("\n" + "="*50)
-    print(" MULTI-DOMAIN INTELLIGENCE PLATFORM")
-    print(" Secure Authentication System")
-    print("="*50)
-    print("\n[1] Register a new user")
-    print("[2] Login")
-    print("[3] Exit")
-    print("-"*50)
-
-def main():
-    """
-    Main program loop.
-    """    
-    while True:
-        display_menu()
-        choice = input("\nPlease select an option (1-3): ").strip()
-        
-        # REGISTRATION BLOCK
-        if choice == '1':
-            # Registration flow
-            print("\n--- USER REGISTRATION ---")
-            username = input("Enter a username: ").strip()
-
-            # Validate username
-            is_valid, error_msg = validate_username(username)
-            if not is_valid:
-                print(f"Error: {error_msg}")
-                continue
-
-            
-            print("\nPassword Requirements:")
-            print("- At least 8 characters")
-            print("- Must include: uppercase letter, number, and special character")
-            password = input("Enter a password: ").strip()
-
-            # Check strength and display feedback
-            strength = check_password_strength(password)
-            print(f"Password Strength: {strength}")
-
-            # Validate password
-            is_valid, error_msg = validate_password(password)
-            if not is_valid:
-                print(f"Error: {error_msg}")
-                continue 
-
-            # Confirm password
-            password_confirm = input("Confirm password: ").strip()
-            if password != password_confirm:
-                print("Error: Passwords do not match.")
-                continue
-
-            # Register the user
-            role = "user"  # default role
-            if register_user(username, password, role="user"):
-                print(f"Registration successful! User '{username}' with role {role} created. You can now log in.")
-            else:
-                print(f"Error: Username '{username}' already exists.")
-            
-        # LOGIN BLOCK
-        elif choice == '2':
-            # Login flow
-            print("\n--- USER LOGIN ---")
-            username = input("Enter your username: ").strip()
-            password = input("Enter your password: ").strip()
-
-            # Attempt login
-            result, role = login_user(username, password)
-    
-            if result == "success":
-                print(f"\nSuccess! Welcome, {username}. You are now logged in.")
-                if role == "admin":
-                    print(">>> You are logged in as an ADMIN.")
-                    # NB: Put admin menu here in the future
-                else:
-                    print("(In a real application, you would now access the dashboard)")
-                input("\nPress Enter to return to main menu...")
-
-            # Conditional statement for when errors occur    
-            elif result == "wrong_password":
-                print("Error: Invalid password.")
-            elif result == "user_not_found":
-                print("Error: Username not found.")
-            else:
-                print("Error: Unexpected login result. Please contact admin")
-
-        # EXIT BLOCK    
-        elif choice == '3':
-            print("\nThank you for using the authentication system.")
-            print("Exiting...")
-            break
-
-        else:
-            print("\nError: Invalid option. Please select 1, 2, or 3.")
-
-if __name__ == "__main__":
-    main()
 

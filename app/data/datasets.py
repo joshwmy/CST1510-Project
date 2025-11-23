@@ -23,13 +23,6 @@ def create_dataset(
 ) -> int:
     """
     Creates a dataset record and return its new id.
-
-    This function does a few simple checks, inserts the row and returns the
-    newly created id. On error it prints a small message and returns -1.
-
-    Note: `description` is saved into the `category` column to match the
-    current database schema. Remember to add a dedicated `description`
-    column later — this keeps compatibility.
     """
     # basic validation; keeps it short and clear
     if not (name and uploaded_by and upload_date):
@@ -44,10 +37,10 @@ def create_dataset(
         cur.execute(
             """
             INSERT INTO datasets_metadata
-            (dataset_name, record_count, category, source, last_updated)
+            (name, rows, columns, uploaded_by, upload_date)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (name, rows, description, uploaded_by, upload_date),
+            (name, rows, columns, uploaded_by, upload_date),
         )
         new_id = cur.lastrowid
         conn.commit()
@@ -84,7 +77,7 @@ def get_dataset_by_name(name: str) -> Optional[Dict[str, Any]]:
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM datasets_metadata WHERE dataset_name = ?", (name,))
+        cur.execute("SELECT * FROM datasets_metadata WHERE name = ?", (name,))
         row = cur.fetchone()
         return dict(row) if row else None
     except sqlite3.Error as err:
@@ -97,14 +90,14 @@ def get_dataset_by_name(name: str) -> Optional[Dict[str, Any]]:
 # ---------------------- READ (all / filtered) ----------------------
 
 def get_all_datasets(as_dataframe: bool = False):
-    """Return every dataset, newest first. Use a DataFrame if you want it."""
+    """Return every dataset, newest first. User can even have a DataFrame if they wish."""
     conn = connect_database()
     try:
         if as_dataframe:
-            return pd.read_sql_query("SELECT * FROM datasets_metadata ORDER BY last_updated DESC", conn)
+            return pd.read_sql_query("SELECT * FROM datasets_metadata ORDER BY upload_date DESC", conn)
 
         cur = conn.cursor()
-        cur.execute("SELECT * FROM datasets_metadata ORDER BY last_updated DESC")
+        cur.execute("SELECT * FROM datasets_metadata ORDER BY upload_date DESC")
         return [dict(r) for r in cur.fetchall()]
 
     except sqlite3.Error as err:
@@ -115,8 +108,7 @@ def get_all_datasets(as_dataframe: bool = False):
 
 
 def get_datasets_by_filters(
-    category: Optional[str] = None,
-    source: Optional[str] = None,
+    uploaded_by: Optional[str] = None,
     min_rows: Optional[int] = None,
     max_rows: Optional[int] = None,
     as_dataframe: bool = False,
@@ -127,20 +119,17 @@ def get_datasets_by_filters(
         query = "SELECT * FROM datasets_metadata WHERE 1=1"
         params: List = []
 
-        if category:
-            query += " AND category = ?"
-            params.append(category)
-        if source:
-            query += " AND source = ?"
-            params.append(source)
+        if uploaded_by:
+            query += " AND uploaded_by = ?"
+            params.append(uploaded_by)
         if min_rows is not None:
-            query += " AND record_count >= ?"
+            query += " AND rows >= ?"
             params.append(min_rows)
         if max_rows is not None:
-            query += " AND record_count <= ?"
+            query += " AND rows <= ?"
             params.append(max_rows)
 
-        query += " ORDER BY last_updated DESC"
+        query += " ORDER BY upload_date DESC"
 
         if as_dataframe:
             return pd.read_sql_query(query, conn, params=params)
@@ -161,38 +150,34 @@ def get_datasets_by_filters(
 def update_dataset(
     dataset_id: int,
     name: Optional[str] = None,
-    category: Optional[str] = None,
-    source: Optional[str] = None,
-    last_updated: Optional[str] = None,
-    record_count: Optional[int] = None,
-    file_size_mb: Optional[float] = None,
+    rows: Optional[int] = None,
+    columns: Optional[int] = None,
+    uploaded_by: Optional[str] = None,
+    upload_date: Optional[str] = None,
 ) -> bool:
     """Updates any provided fields on a dataset. Returns True on success."""
     updates: List[str] = []
     params: List[Any] = []
 
     if name is not None:
-        updates.append("dataset_name = ?")
+        updates.append("name = ?")
         params.append(name)
-    if category is not None:
-        updates.append("category = ?")
-        params.append(category)
-    if source is not None:
-        updates.append("source = ?")
-        params.append(source)
-    if last_updated is not None:
-        updates.append("last_updated = ?")
-        params.append(last_updated)
-    if record_count is not None:
-        if record_count < 0:
-            raise ValueError("record_count must be non-negative")
-        updates.append("record_count = ?")
-        params.append(record_count)
-    if file_size_mb is not None:
-        if file_size_mb < 0:
-            raise ValueError("file_size_mb must be non-negative")
-        updates.append("file_size_mb = ?")
-        params.append(file_size_mb)
+    if rows is not None:
+        if rows < 0:
+            raise ValueError("rows must be non-negative")
+        updates.append("rows = ?")
+        params.append(rows)
+    if columns is not None:
+        if columns < 0:
+            raise ValueError("columns must be non-negative")
+        updates.append("columns = ?")
+        params.append(columns)
+    if uploaded_by is not None:
+        updates.append("uploaded_by = ?")
+        params.append(uploaded_by)
+    if upload_date is not None:
+        updates.append("upload_date = ?")
+        params.append(upload_date)
 
     if not updates:
         # nothing to do; caller passed no fields
@@ -249,36 +234,19 @@ def get_total_datasets_count() -> int:
 
 # ---------------------- ANALYTICS ----------------------
 
-def get_dataset_count_by_category() -> Dict[str, int]:
-    """Count datasets grouped by category (returns a simple dict)."""
+def get_dataset_count_by_uploaded_by() -> Dict[str, int]:
+    """Count datasets grouped by uploader."""
     conn = connect_database()
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT category, COUNT(*) AS count
+            SELECT uploaded_by, COUNT(*) AS count
             FROM datasets_metadata
-            GROUP BY category
+            GROUP BY uploaded_by
             """
         )
-        return {row['category']: row['count'] for row in cur.fetchall()}
-    finally:
-        conn.close()
-
-
-def get_dataset_count_by_source() -> Dict[str, int]:
-    """Count datasets grouped by source (returns a simple dict)."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT source, COUNT(*) AS count
-            FROM datasets_metadata
-            GROUP BY source
-            """
-        )
-        return {row['source']: row['count'] for row in cur.fetchall()}
+        return {row['uploaded_by']: row['count'] for row in cur.fetchall()}
     finally:
         conn.close()
 
@@ -293,14 +261,11 @@ def get_all_analytics() -> Dict[str, Any]:
         cur.execute("SELECT COUNT(*) as total FROM datasets_metadata")
         stats['total_datasets'] = cur.fetchone()['total']
 
-        cur.execute("SELECT COALESCE(SUM(record_count), 0) as total_rows FROM datasets_metadata")
+        cur.execute("SELECT COALESCE(SUM(rows), 0) as total_rows FROM datasets_metadata")
         stats['total_rows'] = cur.fetchone()['total_rows']
 
-        cur.execute("SELECT category, COUNT(*) as count FROM datasets_metadata GROUP BY category")
-        stats['by_category'] = {r['category']: r['count'] for r in cur.fetchall()}
-
-        cur.execute("SELECT source, COUNT(*) as count FROM datasets_metadata GROUP BY source")
-        stats['by_source'] = {r['source']: r['count'] for r in cur.fetchall()}
+        cur.execute("SELECT uploaded_by, COUNT(*) as count FROM datasets_metadata GROUP BY uploaded_by")
+        stats['by_uploaded_by'] = {r['uploaded_by']: r['count'] for r in cur.fetchall()}
 
         return stats
 
@@ -316,7 +281,7 @@ def get_recent_datasets(limit: int = 10) -> List[Dict[str, Any]]:
         cur.execute(
             """
             SELECT * FROM datasets_metadata
-            ORDER BY last_updated DESC
+            ORDER BY upload_date DESC
             LIMIT ?
             """,
             (limit,)
@@ -338,7 +303,6 @@ def _test_datasets_module():
         columns=15,
         uploaded_by="test_user",
         upload_date="2024-01-15",
-        description="Test dataset for validation",
     )
     print("Created dataset:", dataset_id)
 

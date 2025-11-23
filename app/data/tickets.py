@@ -23,7 +23,7 @@ def create_ticket(
     category: str,
     subject: str,
     description: str = "",
-    created_date: str = "",
+    created_at: str = "",
     resolved_date: Optional[str] = None,
     assigned_to: Optional[str] = None,
 ) -> int:
@@ -31,7 +31,7 @@ def create_ticket(
     Create a new IT ticket and return its DB id.
 
     This does some light validation (so data stays tidy), fills a sensible
-    default for `created_date` if none is given, and inserts the ticket.
+    default for `created_at` if none is given, and inserts the ticket.
     On success it returns the newly-created row id; on failure it returns -1.
     """
     # basic required fields
@@ -45,19 +45,19 @@ def create_ticket(
     if status not in VALID_STATUSES:
         raise ValueError(f"Invalid status — must be one of: {', '.join(VALID_STATUSES)}")
 
-    # if caller didn't supply a created_date, use today's date (ISO format)
-    if not created_date:
-        created_date = date.today().isoformat()
+    # if caller didn't supply a created_at, use today's date (ISO format)
+    if not created_at:
+        created_at = date.today().isoformat()
     conn = connect_database()
     try:
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO it_tickets
-            (ticket_id, priority, status, category, subject, description, created_date, resolved_date, assigned_to)
+            (ticket_id, priority, status, category, subject, description, created_at, resolved_date, assigned_to)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (ticket_id, priority, status, category, subject, description, created_date, resolved_date, assigned_to),
+            (ticket_id, priority, status, category, subject, description, created_at, resolved_date, assigned_to),
         )
         new_id = cur.lastrowid
         conn.commit()
@@ -117,10 +117,10 @@ def get_all_tickets(as_dataframe: bool = False):
     conn = connect_database()
     try:
         if as_dataframe:
-            return pd.read_sql_query("SELECT * FROM it_tickets ORDER BY created_date DESC", conn)
+            return pd.read_sql_query("SELECT * FROM it_tickets ORDER BY created_at DESC", conn)
 
         cur = conn.cursor()
-        cur.execute("SELECT * FROM it_tickets ORDER BY created_date DESC")
+        cur.execute("SELECT * FROM it_tickets ORDER BY created_at DESC")
         return [dict(r) for r in cur.fetchall()]
 
     except sqlite3.Error as err:
@@ -160,13 +160,13 @@ def get_tickets_by_filters(
             query += " AND assigned_to = ?"
             params.append(assigned_to)
         if date_from:
-            query += " AND created_date >= ?"
+            query += " AND created_at >= ?"
             params.append(date_from)
         if date_to:
-            query += " AND created_date <= ?"
+            query += " AND created_at <= ?"
             params.append(date_to)
 
-        query += " ORDER BY created_date DESC"
+        query += " ORDER BY created_at DESC"
 
         if as_dataframe:
             return pd.read_sql_query(query, conn, params=params)
@@ -352,7 +352,7 @@ def get_recent_tickets(limit: int = 10) -> List[Dict[str, Any]]:
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM it_tickets ORDER BY created_date DESC LIMIT ?", (limit,))
+        cur.execute("SELECT * FROM it_tickets ORDER BY created_at DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -368,7 +368,7 @@ def get_high_priority_open_tickets() -> List[Dict[str, Any]]:
             SELECT * FROM it_tickets 
             WHERE priority IN ('High', 'Critical') 
             AND status IN ('Open', 'In Progress')
-            ORDER BY created_date DESC
+            ORDER BY created_at DESC
             """
         )
         return [dict(r) for r in cur.fetchall()]
