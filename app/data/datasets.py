@@ -18,8 +18,6 @@ def create_dataset(
     columns: int,
     uploaded_by: str,
     upload_date: str,
-    description: str = "",
-    file_path: str = "",
 ) -> int:
     """
     Creates a dataset record and return its new id.
