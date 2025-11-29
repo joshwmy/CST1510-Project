@@ -1,618 +1,692 @@
-# streamlit_app.py
+# main.py
+"""
+Streamlit app (no matplotlib) — uses only native Streamlit charts for data representation.
+Integrates user_service for auth/session management and backend modules:
+csv_loader, datasets, incidents, tickets, users.
+"""
+
+import io
+import os
+from pathlib import Path
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from datetime import datetime
-import sys
-import os
+import numpy as np
+import time
+from typing import Optional
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# -------------------------
+# Backend imports (adjust path if needed)
+# -------------------------
+try:
+    from app.data import csv_loader as csv_loader_mod
+    from app.data import datasets as datasets_mod
+    from app.data import incidents as incidents_mod
+    from app.data import tickets as tickets_mod
+    from app.data import users as users_mod
+    from app.services import user_service as user_service_mod
+except Exception as e:
+    st.error(f"Error importing backend modules: {e}")
+    csv_loader_mod = datasets_mod = incidents_mod = tickets_mod = users_mod = user_service_mod = None
 
-from app.services.user_service import login_user, register_user, get_session, invalidate_session
-from app.data.incidents import get_all_incidents, get_incidents_by_filters
-from app.data.tickets import get_all_tickets, get_tickets_by_filters
-from app.data.datasets import get_all_datasets
-from app.data.csv_loader import load_all_csv_data, verify_data_loading
+# -------------------------
+# Page config & session
+# -------------------------
+st.set_page_config(page_title="Admin Portal", layout="wide")
 
-# --------------------------------------------------
-# PAGE CONFIG
-# --------------------------------------------------
-st.set_page_config(
-    page_title="Intelligence Platform",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
+if "session_token" not in st.session_state:
+    st.session_state.session_token = None
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "home"
+if "current_domain" not in st.session_state:
+    st.session_state.current_domain = "Datasets"
 
-# --------------------------------------------------
-# HELPER: CHECK CURRENT SESSION
-# --------------------------------------------------
-def get_current_session():
-    token = st.session_state.get("auth_token")
-    if not token:
-        return None
-    return get_session(token)
-
-# --------------------------------------------------
-# DATA INITIALIZATION (Only after login)
-# --------------------------------------------------
-def initialize_sample_data():
-    """Load sample data if tables are empty"""
+# -------------------------
+# Helpers
+# -------------------------
+def safe_df(obj) -> pd.DataFrame:
+    """Convert backend results to DataFrame safely."""
     try:
-        from app.data.incidents import get_total_incidents_count
-        from app.data.tickets import get_total_tickets_count
+        if isinstance(obj, pd.DataFrame):
+            return obj
+        if isinstance(obj, (list, tuple)):
+            return pd.DataFrame(obj)
+        if isinstance(obj, dict):
+            return pd.DataFrame([obj])
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+def small_stat_col_layout(values, labels):
+    cols = st.columns(len(values))
+    for c, v, l in zip(cols, values, labels):
+        c.metric(l, v)
+
+# -------------------------
+# CSV Upload Handlers
+# -------------------------
+def handle_csv_upload(uploaded_file, domain: str, username: str):
+    """Process uploaded CSV files for different domains"""
+    try:
+        # Read the CSV file
+        df = pd.read_csv(uploaded_file)
         
-        if get_total_incidents_count() == 0 and get_total_tickets_count() == 0:
-            st.info("📊 Loading sample data for first-time setup...")
-            results = load_all_csv_data()
-            verify_data_loading()
-            st.success("✅ Sample data loaded successfully!")
-            st.rerun()
+        # Process based on domain
+        if domain == "Datasets":
+            return handle_dataset_upload(df, username, uploaded_file.name)
+        elif domain == "Cybersecurity":
+            return handle_incident_upload(df, username, uploaded_file.name)
+        elif domain == "IT Tickets":
+            return handle_ticket_upload(df, username, uploaded_file.name)
+        else:
+            return False, f"Unknown domain: {domain}"
+            
     except Exception as e:
-        st.error(f"❌ Error loading data: {e}")
+        return False, f"Error reading CSV: {str(e)}"
 
-# --------------------------------------------------
-# AUTHENTICATION PAGES
-# --------------------------------------------------
-def show_login_page():
-    # Simple centered login form without data loading
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        st.title("🔐 Intelligence Platform")
-        st.markdown("---")
+def handle_dataset_upload(df, username, filename):
+    """Create dataset entry from uploaded CSV"""
+    try:
+        dataset_name = os.path.splitext(filename)[0]  # Use filename as dataset name
+        description = f"Uploaded from CSV: {filename}"
         
-        # Login/Register tabs
-        tab1, tab2 = st.tabs(["🚀 Login", "📝 Register"])
-        
-        with tab1:
-            st.subheader("Sign In to Your Account")
-            
-            with st.form("login_form"):
-                username = st.text_input("👤 Username", placeholder="Enter your username")
-                password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
-                
-                login_btn = st.form_submit_button("Login", use_container_width=True, type="primary")
-                
-                if login_btn:
-                    if username and password:
-                        with st.spinner("Authenticating..."):
-                            status, role, token = login_user(username, password)
-                            
-                            if status == "success":
-                                st.session_state["auth_token"] = token
-                                st.session_state["username"] = username
-                                st.session_state["role"] = role
-                                st.success("✅ Logged in successfully!")
-                                st.rerun()
-                            elif status == "locked":
-                                st.error("🔒 Your account is locked. Try again later.")
-                            else:
-                                st.error("❌ Invalid username or password.")
-                    else:
-                        st.warning("⚠️ Please enter both username and password.")
-        
-        with tab2:
-            st.subheader("Create New Account")
-            
-            with st.form("registration_form"):
-                new_username = st.text_input("New Username")
-                new_password = st.text_input("New Password", type="password")
-                confirm_password = st.text_input("Confirm Password", type="password")
-                
-                register_btn = st.form_submit_button("Create Account", use_container_width=True)
-                
-                if register_btn:
-                    if new_username and new_password:
-                        if new_password == confirm_password:
-                            if register_user(new_username, new_password):
-                                st.success("✅ Account created successfully! Please login.")
-                            else:
-                                st.error("❌ Username already exists.")
-                        else:
-                            st.error("❌ Passwords do not match")
-                    else:
-                        st.warning("⚠️ Please fill all required fields")
-
-# --------------------------------------------------
-# LOGOUT
-# --------------------------------------------------
-def logout():
-    token = st.session_state.get("auth_token")
-    if token:
-        invalidate_session(token)
-    
-    st.session_state.clear()
-    st.success("👋 Logged out successfully!")
-    st.rerun()
-
-# --------------------------------------------------
-# DATA PROCESSING HELPERS
-# --------------------------------------------------
-def process_incidents_data(df):
-    """Process incidents data for display"""
-    if df.empty:
-        return df
-    
-    # Convert timestamp to datetime if needed
-    if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-    
-    return df
-
-def process_tickets_data(df):
-    """Process tickets data for display"""
-    if df.empty:
-        return df
-    
-    # Convert timestamp to datetime if needed
-    if 'created_at' in df.columns:
-        df['created_at'] = pd.to_datetime(df['created_at'])
-    
-    return df
-
-def process_datasets_data(df):
-    """Process datasets data for display"""
-    if df.empty:
-        return df
-    
-    return df
-
-# --------------------------------------------------
-# DASHBOARD: INCIDENTS
-# --------------------------------------------------
-def page_incidents():
-    st.title("🚨 Cyber Incidents Dashboard")
-    
-    # Get all incidents and process the data
-    raw_data = get_all_incidents()
-    df = process_incidents_data(pd.DataFrame(raw_data))
-    
-    if df.empty:
-        st.info("📊 No incidents found in the database.")
-        if st.button("🔄 Load Sample Data"):
-            initialize_sample_data()
-        return
-    
-    # Calculates analytics
-    total_incidents = len(df)
-    open_incidents = len(df[df['status'].isin(['Open', 'In Progress'])])
-    
-    severity_counts = df['severity'].value_counts()
-    high_critical = severity_counts.get('High', 0) + severity_counts.get('Critical', 0)
-    
-    status_counts = df['status'].value_counts()
-    resolved_closed = status_counts.get('Resolved', 0) + status_counts.get('Closed', 0)
-    
-    # Analytics Overview
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Incidents", total_incidents)
-    with col2:
-        st.metric("Open Incidents", open_incidents)
-    with col3:
-        st.metric("High/Critical", high_critical)
-    with col4:
-        st.metric("Resolved/Closed", resolved_closed)
-    
-    # Filters
-    st.subheader("🔍 Filters")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        severity_filter = st.multiselect(
-            "Severity",
-            ["Low", "Medium", "High", "Critical"],
-            default=["Low", "Medium", "High", "Critical"]
+        created = datasets_mod.create_dataset(
+            name=dataset_name,
+            description=description,
+            rows=len(df),
+            columns=len(df.columns),
+            uploaded_by=username
         )
-    with col2:
-        status_filter = st.multiselect(
-            "Status",
-            ["Open", "In Progress", "Closed", "Resolved"],
-            default=["Open", "In Progress", "Resolved", "Closed"]
-        )
-    with col3:
-        categories = df['incident_type'].unique().tolist() if 'incident_type' in df.columns else []
-        category_filter = st.multiselect("Category", categories, default=categories)
-    
-    # Apply filters
-    filtered_df = df.copy()
-    
-    if severity_filter:
-        filtered_df = filtered_df[filtered_df['severity'].isin(severity_filter)]
-    if status_filter:
-        filtered_df = filtered_df[filtered_df['status'].isin(status_filter)]
-    if category_filter and 'incident_type' in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df['incident_type'].isin(category_filter)]
-    
-    if filtered_df.empty:
-        st.info("📊 No incidents found matching your filters.")
-        return
-    
-    # Charts
-    col_chart1, col_chart2 = st.columns(2)
-    
-    with col_chart1:
-        st.subheader("Incidents by Severity")
-        if "severity" in filtered_df.columns:
-            severity_counts = filtered_df["severity"].value_counts()
-            fig = px.pie(
-                values=severity_counts.values,
-                names=severity_counts.index,
-                color=severity_counts.index,
-                color_discrete_map={
-                    'Critical': 'red',
-                    'High': 'orange', 
-                    'Medium': 'yellow',
-                    'Low': 'green'
-                }
-            )
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with col_chart2:
-        st.subheader("Incidents by Category")
-        if "incident_type" in filtered_df.columns:
-            category_counts = filtered_df["incident_type"].value_counts()
-            fig = px.bar(
-                x=category_counts.index,
-                y=category_counts.values,
-                color=category_counts.index
-            )
-            fig.update_layout(xaxis_title="Category", yaxis_title="Count")
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Data Table
-    with st.expander("📋 Incident Details", expanded=False):
-        if not filtered_df.empty:
-            display_df = filtered_df.copy()
-            
-            # Select columns for display
-            display_columns = ['incident_id', 'timestamp', 'severity', 'category', 'status', 'description']
-            display_columns = [col for col in display_columns if col in display_df.columns]
-            
-            display_df = display_df[display_columns]
-            
-            # Format date
-            if 'timestamp' in display_df.columns:
-                display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M')
-            
-            st.dataframe(display_df, use_container_width=True)
-            
-            # Export option
-            csv = display_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Export to CSV",
-                data=csv,
-                file_name=f"incidents_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
+        return True, f"Dataset '{dataset_name}' created with {len(df)} rows"
+    except Exception as e:
+        return False, f"Error creating dataset: {str(e)}"
 
-# --------------------------------------------------
-# DASHBOARD: TICKETS
-# --------------------------------------------------
-def page_tickets():
-    st.title("🎫 IT Tickets Dashboard")
-    
-    # Get all tickets
-    raw_data = get_all_tickets()
-    df = process_tickets_data(pd.DataFrame(raw_data))
-    
-    if df.empty:
-        st.info("📊 No tickets found in the database.")
-        if st.button("🔄 Load Sample Data"):
-            initialize_sample_data()
-        return
-    
-    # Calculate analytics
-    total_tickets = len(df)
-    open_tickets = len(df[df['status'].isin(['Open', 'In Progress', 'Waiting for User'])])
-    
-    priority_counts = df['priority'].value_counts()
-    high_critical = priority_counts.get('High', 0) + priority_counts.get('Critical', 0)
-    
-    assigned_count = df['assigned_to'].notna().sum()
-    
-    # Analytics Overview
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Tickets", total_tickets)
-    with col2:
-        st.metric("Open Tickets", open_tickets)
-    with col3:
-        st.metric("High/Critical", high_critical)
-    with col4:
-        st.metric("Assigned Tickets", assigned_count)
-    
-    # Filters
-    st.subheader("🔍 Filters")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        priority_filter = st.multiselect(
-            "Priority",
-            ["Low", "Medium", "High", "Critical"],
-            default=["Low", "Medium", "High", "Critical"]
-        )
-    with col2:
-        status_filter = st.multiselect(
-            "Status",
-            ["Open", "In Progress", "Resolved", "Closed", "Waiting for User"],
-            default=["Open", "In Progress", "Resolved", "Closed", "Waiting for User"]
-        )
-    with col3:
-        assignees = df['assigned_to'].unique().tolist() if 'assigned_to' in df.columns else []
-        assignee_filter = st.multiselect("Assigned To", assignees, default=assignees)
-    
-    # Apply filters
-    filtered_df = df.copy()
-    
-    if priority_filter:
-        filtered_df = filtered_df[filtered_df['priority'].isin(priority_filter)]
-    if status_filter:
-        filtered_df = filtered_df[filtered_df['status'].isin(status_filter)]
-    if assignee_filter and 'assigned_to' in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df['assigned_to'].isin(assignee_filter)]
-    
-    if filtered_df.empty:
-        st.info("📊 No tickets found matching your filters.")
-        return
-    
-    # Charts
-    col_chart1, col_chart2 = st.columns(2)
-    
-    with col_chart1:
-        st.subheader("Tickets by Priority")
-        if "priority" in filtered_df.columns:
-            priority_counts = filtered_df["priority"].value_counts()
-            fig = px.bar(
-                x=priority_counts.index,
-                y=priority_counts.values,
-                color=priority_counts.index,
-                color_discrete_map={
-                    'Critical': 'red',
-                    'High': 'orange',
-                    'Medium': 'yellow',
-                    'Low': 'green'
-                }
-            )
-            fig.update_layout(xaxis_title="Priority", yaxis_title="Count")
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with col_chart2:
-        st.subheader("Tickets by Status")
-        if "status" in filtered_df.columns:
-            status_counts = filtered_df["status"].value_counts()
-            fig = px.pie(values=status_counts.values, names=status_counts.index)
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Data Table
-    with st.expander("📋 Ticket Details", expanded=False):
-        if not filtered_df.empty:
-            display_df = filtered_df.copy()
-            
-            # Select columns for display
-            display_columns = ['ticket_id', 'priority', 'status', 'assigned_to', 'created_at', 'description', 'resolution_time_hours']
-            display_columns = [col for col in display_columns if col in display_df.columns]
-            
-            display_df = display_df[display_columns]
-            
-            # Format date
-            if 'created_at' in display_df.columns:
-                display_df['created_at'] = display_df['created_at'].dt.strftime('%Y-%m-%d %H:%M')
-            
-            st.dataframe(display_df, use_container_width=True)
-            
-            # Export option
-            csv = display_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Export to CSV",
-                data=csv,
-                file_name=f"tickets_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-
-# --------------------------------------------------
-# DASHBOARD: DATASETS
-# --------------------------------------------------
-def page_datasets():
-    st.title("📁 Datasets Overview")
-    
-    # Get all datasets
-    raw_data = get_all_datasets()
-    df = process_datasets_data(pd.DataFrame(raw_data))
-    
-    if df.empty:
-        st.info("📊 No datasets found in the database.")
-        if st.button("🔄 Load Sample Data"):
-            initialize_sample_data()
-        return
-    
-    # Calculate analytics
-    total_datasets = len(df)
-    total_rows = df['record_count'].sum() if 'record_count' in df.columns else 0
-    categories = df['category'].nunique() if 'category' in df.columns else 0
-    sources = df['source'].nunique() if 'source' in df.columns else 0
-    
-    # Analytics Overview
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Datasets", total_datasets)
-    with col2:
-        st.metric("Total Rows", f"{total_rows:,}")
-    with col3:
-        st.metric("Categories", categories)
-    with col4:
-        st.metric("Sources", sources)
-    
-    # Data Table
-    with st.expander("📋 Dataset Details", expanded=True):
-        if not df.empty:
-            display_df = df.copy()
-            
-            # Select columns for display
-            display_columns = ['name', 'rows', 'columns', 'uploaded_by', 'upload_date']
-            display_columns = [col for col in display_columns if col in display_df.columns]
-            
-            display_df = display_df[display_columns]
-            
-            st.dataframe(display_df, use_container_width=True)
-            
-            # Export option
-            csv = display_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Export to CSV",
-                data=csv,
-                file_name=f"datasets_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-    
-    # Charts
-    col_chart1, col_chart2 = st.columns(2)
-    
-    with col_chart1:
-        st.subheader("Datasets by Category")
-        if "category" in df.columns:
-            category_counts = df["category"].value_counts()
-            fig = px.pie(values=category_counts.values, names=category_counts.index)
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with col_chart2:
-        st.subheader("Dataset Sizes")
-        if "file_size_mb" in df.columns:
-            # Show largest datasets
-            size_df = df.nlargest(10, 'file_size_mb')[['dataset_name', 'file_size_mb']]
-            fig = px.bar(
-                size_df,
-                x='dataset_name',
-                y='file_size_mb',
-                title="Largest Datasets (MB)"
-            )
-            fig.update_layout(xaxis_title="Dataset", yaxis_title="Size (MB)")
-            st.plotly_chart(fig, use_container_width=True)
-
-# --------------------------------------------------
-# ADMIN PANEL
-# --------------------------------------------------
-def page_admin():
-    st.title("⚙️ Admin Panel")
-    
-    if st.session_state.get("role") != "admin":
-        st.warning("🔒 Admin access required")
-        return
-    
-    tab1, tab2 = st.tabs(["Data Management", "System Info"])
-    
-    with tab1:
-        st.subheader("Data Management")
+def handle_incident_upload(df, username, filename):
+    """Create incidents from uploaded CSV"""
+    try:
+        created_count = 0
+        errors = []
         
-        col1, col2 = st.columns(2)
+        # Expected columns mapping (adjust based on your CSV structure)
+        for idx, row in df.iterrows():
+            try:
+                incident_id = incidents_mod.create_incident(
+                    timestamp=row.get('timestamp', time.strftime("%Y-%m-%d %H:%M:%S")),
+                    incident_type=row.get('incident_type', 'Unknown'),
+                    severity=row.get('severity', 'Medium'),
+                    status=row.get('status', 'Open'),
+                    description=row.get('description', f'Uploaded from {filename}'),
+                    reported_by=row.get('reported_by', username)
+                )
+                created_count += 1
+            except Exception as e:
+                errors.append(f"Row {idx}: {str(e)}")
         
-        with col1:
-            if st.button("🔄 Load Sample Data", use_container_width=True):
+        message = f"Created {created_count} incidents from CSV"
+        if errors:
+            message += f". Errors: {', '.join(errors[:3])}"  # Show first 3 errors
+        return True, message
+        
+    except Exception as e:
+        return False, f"Error processing incidents: {str(e)}"
+
+def handle_ticket_upload(df, username, filename):
+    """Create tickets from uploaded CSV"""
+    try:
+        created_count = 0
+        errors = []
+        
+        for idx, row in df.iterrows():
+            try:
+                ticket_id = tickets_mod.create_ticket(
+                    title=row.get('title', f'Ticket from {filename}'),
+                    description=row.get('description', ''),
+                    priority=row.get('priority', 'Medium'),
+                    assigned_to=row.get('assigned_to', ''),
+                    reported_by=row.get('reported_by', username)
+                )
+                created_count += 1
+            except Exception as e:
+                errors.append(f"Row {idx}: {str(e)}")
+        
+        message = f"Created {created_count} tickets from CSV"
+        if errors:
+            message += f". Errors: {', '.join(errors[:3])}"
+        return True, message
+        
+    except Exception as e:
+        return False, f"Error processing tickets: {str(e)}"
+    
+# -------------------------
+# Create forms (incidents, tickets, datasets)
+# -------------------------
+def add_incident_form(default_reported_by: str = ""):
+    if incidents_mod is None:
+        return False, "Incidents backend unavailable."
+    with st.expander("➕ Add new incident", expanded=False):
+        with st.form("new_incident_form"):
+            timestamp = st.text_input("Timestamp (ISO / human)", value=time.strftime("%Y-%m-%d %H:%M:%S"))
+            incident_type = st.text_input("Incident type (e.g. Phishing, Malware)")
+            severities = getattr(incidents_mod, "VALID_SEVERITIES", ["Low", "Medium", "High", "Critical"])
+            statuses = getattr(incidents_mod, "VALID_STATUSES", ["Open", "In Progress", "Resolved", "Closed"])
+            severity = st.selectbox("Severity", severities, index=min(2, len(severities)-1))
+            status = st.selectbox("Status", statuses, index=0)
+            reported_by = st.text_input("Reported by", value=default_reported_by)
+            description = st.text_area("Description / details", height=120)
+            submit = st.form_submit_button("Create incident")
+            if submit:
+                if not incident_type.strip():
+                    st.error("Incident type is required.")
+                    return False, "missing_type"
                 try:
-                    results = load_all_csv_data(clear_table=True)
-                    st.success("✅ Data loaded successfully!")
-                    for table, count in results.items():
-                        st.write(f"{table}: {count} rows loaded")
-                    verify_data_loading()
-                    st.rerun()
+                    new_id = incidents_mod.create_incident(
+                        timestamp=timestamp.strip(),
+                        incident_type=incident_type.strip(),
+                        severity=severity.strip(),
+                        status=status.strip(),
+                        description=description.strip(),
+                        reported_by=reported_by.strip() or default_reported_by
+                    )
+                    st.success(f"Incident created (id {new_id}).")
+                    return True, new_id
                 except Exception as e:
-                    st.error(f"❌ Error loading data: {e}")
-        
-        with col2:
-            if st.button("📊 Verify Data", use_container_width=True):
-                try:
-                    verify_data_loading()
-                    st.success("✅ Data verification complete!")
-                except Exception as e:
-                    st.error(f"❌ Error verifying data: {e}")
-    
-    with tab2:
-        st.subheader("System Information")
-        
-        # Display current data counts
-        try:
-            from app.data.incidents import get_total_incidents_count
-            from app.data.tickets import get_total_tickets_count
-            from app.data.datasets import get_total_datasets_count
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Incidents", get_total_incidents_count())
-            with col2:
-                st.metric("Tickets", get_total_tickets_count())
-            with col3:
-                st.metric("Datasets", get_total_datasets_count())
-        except Exception as e:
-            st.error(f"Error getting system info: {e}")
+                    st.error(f"Error creating incident: {e}")
+                    return False, str(e)
+    return False, "not_submitted"
 
-# --------------------------------------------------
-# MAIN APP LOGIC
-# --------------------------------------------------
-def main():
-    session = get_current_session()
+def add_ticket_form(default_reported_by: str = ""):
+    if tickets_mod is None:
+        return False, "Tickets backend unavailable."
+    with st.expander("➕ Add new ticket", expanded=False):
+        with st.form("new_ticket_form"):
+            title = st.text_input("Title")
+            description = st.text_area("Description", height=120)
+            priorities = getattr(tickets_mod, "VALID_PRIORITIES", ["Low", "Medium", "High", "Critical"])
+            priority = st.selectbox("Priority", options=priorities)
+            assigned_to = st.text_input("Assigned to (optional)")
+            reported_by = st.text_input("Reported by", value=default_reported_by)
+            submit = st.form_submit_button("Create ticket")
+            if submit:
+                if not title.strip():
+                    st.error("Title is required.")
+                    return False, "missing_title"
+                try:
+                    created = tickets_mod.create_ticket(
+                        title=title.strip(),
+                        description=description.strip(),
+                        priority=priority.strip(),
+                        assigned_to=assigned_to.strip(),
+                        reported_by=reported_by.strip() or default_reported_by
+                    )
+                    st.success(f"Ticket created: {created}")
+                    return True, created
+                except Exception as e:
+                    st.error(f"Error creating ticket: {e}")
+                    return False, str(e)
+    return False, "not_submitted"
+
+def add_dataset_form(default_uploaded_by: str = ""):
+    if datasets_mod is None:
+        return False, "Datasets backend unavailable."
+    with st.expander("➕ Add new dataset", expanded=False):
+        with st.form("new_dataset_form"):
+            name = st.text_input("Dataset name")
+            description = st.text_area("Description", height=120)
+            rows = st.number_input("Rows", min_value=0, value=0, step=1)
+            columns = st.number_input("Columns", min_value=0, value=0, step=1)
+            uploaded_by = st.text_input("Uploaded by", value=default_uploaded_by)
+            submit = st.form_submit_button("Create dataset")
+            if submit:
+                if not name.strip():
+                    st.error("Dataset name required.")
+                    return False, "missing_name"
+                try:
+                    created = datasets_mod.create_dataset(
+                        name=name.strip(),
+                        description=description.strip(),
+                        rows=int(rows),
+                        columns=int(columns),
+                        uploaded_by=uploaded_by.strip() or default_uploaded_by
+                    )
+                    st.success(f"Dataset created: {created}")
+                    return True, created
+                except Exception as e:
+                    st.error(f"Error creating dataset: {e}")
+                    return False, str(e)
+    return False, "not_submitted"
+
+# -------------------------
+# Domain-specific views (Streamlit-native charts only)
+# -------------------------
+def datasets_view():
+    st.subheader("Datasets")
     
-    # NOT AUTHENTICATED - Show login page only
-    if not session:
-        show_login_page()
-        st.stop()
+    # Add CSV Upload Section
+    with st.expander("📤 Upload CSV as New Dataset", expanded=False):
+        st.markdown("Drag and drop a CSV file to create a new dataset")
+        uploaded_file = st.file_uploader(
+            "Choose CSV file", 
+            type=['csv'],
+            key="dataset_upload"
+        )
+        
+        if uploaded_file is not None:
+            # Show preview
+            df_preview = pd.read_csv(uploaded_file)
+            st.subheader("CSV Preview")
+            st.dataframe(df_preview.head(5))
+            st.caption(f"Total rows: {len(df_preview)}, Columns: {len(df_preview.columns)}")
+            
+            if st.button("Upload as Dataset", key="upload_dataset_btn"):
+                with st.spinner("Processing CSV file..."):
+                    success, message = handle_csv_upload(
+                        uploaded_file, 
+                        "Datasets", 
+                        st.session_state.username
+                    )
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
     
-    # AUTHENTICATED VIEW - Show dashboard with sidebar
-    # Initialize data only after successful login
-    if "data_initialized" not in st.session_state:
-        initialize_sample_data()
-        st.session_state.data_initialized = True
+    default_uploader = st.session_state.username or ""
+    add_dataset_form(default_uploaded_by=default_uploader)
+
+    with st.expander("Dataset controls", expanded=False):
+        uploader = st.text_input("Uploaded by (exact match)", value="")
+        min_rows = st.number_input("Min rows", min_value=0, value=0, step=1)
+        show_table = st.checkbox("Show raw data", value=True)
+        if st.button("Reload CSVs -> DB"):
+            if csv_loader_mod:
+                try:
+                    result = csv_loader_mod.load_all_csv_data(data_dir="DATA", clear_table=False)
+                    st.success(f"CSV load: {result}")
+                except Exception as e:
+                    st.error(f"CSV load error: {e}")
+            else:
+                st.error("CSV loader not available.")
+
+    try:
+        if uploader or min_rows:
+            df = datasets_mod.get_datasets_by_filters(
+                uploaded_by=(uploader or None),
+                min_rows=(min_rows if min_rows > 0 else None),
+                as_dataframe=True
+            )
+        else:
+            df = datasets_mod.get_all_datasets(as_dataframe=True)
+    except Exception as e:
+        st.error(f"Error fetching datasets: {e}")
+        df = pd.DataFrame()
+
+    df = safe_df(df)
+    n_datasets = len(df)
+    total_rows = int(df["rows"].sum()) if "rows" in df.columns and not df["rows"].isnull().all() else "N/A"
+    small_stat_col_layout([n_datasets, total_rows], ["Datasets", "Total rows"])
+
+    # Chart area: rows distribution (categorical/continuous) using st.bar_chart
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Rows distribution (top values)")
+        if not df.empty and "rows" in df.columns:
+            counts = df["rows"].value_counts().nlargest(20)
+            chart_df = pd.DataFrame({"count": counts})
+            st.bar_chart(chart_df)
+        else:
+            st.info("No 'rows' data to chart.")
+    with col2:
+        st.subheader("Numeric preview (area chart)")
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if numeric_cols:
+            st.area_chart(df[numeric_cols].head(200))
+        else:
+            st.info("No numeric columns available.")
+
+    with st.expander("See data table"):
+        if not df.empty and show_table:
+            # Use data_editor so user can filter client-side
+            st.caption("Use the table's search & filters (data editor).")
+            st.data_editor(df, use_container_width=True)
+        else:
+            st.info("No datasets to show or 'Show raw data' unchecked.")
+
+def cybersecurity_view():
+    st.subheader("Cybersecurity — Incidents")
     
-    # Sidebar Navigation
+    # Add CSV Upload Section
+    with st.expander("📤 Upload CSV of Incidents", expanded=False):
+        st.markdown("""
+        **Expected CSV columns:** 
+        - `incident_type` (required), `severity`, `status`, `description`, `reported_by`, `timestamp`
+        """)
+        uploaded_file = st.file_uploader(
+            "Choose CSV file with incidents", 
+            type=['csv'],
+            key="incident_upload"
+        )
+        
+        if uploaded_file is not None:
+            # Show preview
+            df_preview = pd.read_csv(uploaded_file)
+            st.subheader("CSV Preview")
+            st.dataframe(df_preview.head(5))
+            st.caption(f"Total rows: {len(df_preview)}, Columns: {len(df_preview.columns)}")
+            
+            if st.button("Upload Incidents", key="upload_incident_btn"):
+                with st.spinner("Processing incidents..."):
+                    success, message = handle_csv_upload(
+                        uploaded_file, 
+                        "Cybersecurity", 
+                        st.session_state.username
+                    )
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
+    
+    default_reporter = st.session_state.username or ""
+    add_incident_form(default_reported_by=default_reporter)
+
+    try:
+        analytics = incidents_mod.get_all_incident_analytics()
+    except Exception as e:
+        st.error(f"Error getting analytics: {e}")
+        analytics = {}
+
+    total_inc = analytics.get("total_incidents", 0)
+    open_inc = analytics.get("open_incidents", 0)
+    by_sev = analytics.get("by_severity", {})
+    by_status = analytics.get("by_status", {})
+
+    small_stat_col_layout([total_inc, open_inc], ["Total incidents", "Open incidents"])
+
+    # Replace prior "pie chart" with categorical bar chart (Option A)
+    st.markdown("### Incidents by severity (bar chart)")
+    if by_sev:
+        sev_df = pd.DataFrame({"count": list(by_sev.values())}, index=list(by_sev.keys()))
+        st.bar_chart(sev_df)
+    else:
+        st.info("No severity data available.")
+
+    st.markdown("### Incidents by status (bar chart)")
+    if by_status:
+        status_df = pd.DataFrame({"count": list(by_status.values())}, index=list(by_status.keys()))
+        st.bar_chart(status_df)
+    else:
+        st.info("No status data available.")
+
+    st.markdown("### Filter incidents")
+    fcol1, fcol2, fcol3 = st.columns(3)
+    sev = fcol1.selectbox("Severity", options=[""] + (incidents_mod.VALID_SEVERITIES if hasattr(incidents_mod, "VALID_SEVERITIES") else []))
+    stat = fcol2.selectbox("Status", options=[""] + (incidents_mod.VALID_STATUSES if hasattr(incidents_mod, "VALID_STATUSES") else []))
+    inc_type = fcol3.text_input("Incident type (exact match)")
+
+    try:
+        df_inc = incidents_mod.get_incidents_by_filters(
+            severity=(sev or None),
+            status=(stat or None),
+            incident_type=(inc_type or None),
+            as_dataframe=True
+        )
+    except Exception as e:
+        st.error(f"Error fetching incidents: {e}")
+        df_inc = pd.DataFrame()
+
+    df_inc = safe_df(df_inc)
+    if not df_inc.empty:
+        st.dataframe(df_inc)
+    else:
+        st.info("No incidents match the filters.")
+
+def tickets_view():
+    st.subheader("IT Tickets")
+    
+    # Add CSV Upload Section
+    with st.expander("📤 Upload CSV of Tickets", expanded=False):
+        st.markdown("""
+        **Expected CSV columns:** 
+        - `title` (required), `description`, `priority`, `assigned_to`, `reported_by`
+        """)
+        uploaded_file = st.file_uploader(
+            "Choose CSV file with tickets", 
+            type=['csv'],
+            key="ticket_upload"
+        )
+        
+        if uploaded_file is not None:
+            # Show preview
+            df_preview = pd.read_csv(uploaded_file)
+            st.subheader("CSV Preview")
+            st.dataframe(df_preview.head(5))
+            st.caption(f"Total rows: {len(df_preview)}, Columns: {len(df_preview.columns)}")
+            
+            if st.button("Upload Tickets", key="upload_ticket_btn"):
+                with st.spinner("Processing tickets..."):
+                    success, message = handle_csv_upload(
+                        uploaded_file, 
+                        "IT Tickets", 
+                        st.session_state.username
+                    )
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
+   
+    default_reporter = st.session_state.username or ""
+    add_ticket_form(default_reported_by=default_reporter)
+
+    try:
+        t_stats = tickets_mod.get_all_ticket_analytics()
+    except Exception as e:
+        st.error(f"Error fetching ticket analytics: {e}")
+        t_stats = {}
+
+    total_t = t_stats.get("total_tickets", 0)
+    open_t = t_stats.get("open_tickets", 0)
+    by_assigned = t_stats.get("by_assigned_to", {})
+    by_priority = t_stats.get("by_priority", {})
+
+    small_stat_col_layout([total_t, open_t], ["Total tickets", "Open tickets"])
+
+    st.markdown("### Top assigned personnel (bar chart)")
+    if by_assigned:
+        assigned_df = pd.DataFrame({"count": list(by_assigned.values())}, index=list(by_assigned.keys()))
+        st.bar_chart(assigned_df)
+    else:
+        st.info("No assigned-to data available.")
+
+    st.markdown("### Tickets by priority (bar chart)")
+    if by_priority:
+        pr_df = pd.DataFrame({"count": list(by_priority.values())}, index=list(by_priority.keys()))
+        st.bar_chart(pr_df)
+    else:
+        st.info("No priority data available.")
+
+    st.markdown("### Recent tickets")
+    try:
+        recent = tickets_mod.get_recent_tickets(limit=20)
+    except Exception as e:
+        st.error(f"Error fetching recent tickets: {e}")
+        recent = []
+    df_recent = safe_df(recent)
+    if not df_recent.empty:
+        st.dataframe(df_recent)
+    else:
+        st.info("No recent tickets.")
+
+# -------------------------
+# Authentication UI (login / register)
+# -------------------------
+def show_home():
+    st.title("Welcome — Sign in / Register")
+
+    if user_service_mod is None:
+        st.error("Authentication service unavailable.")
+        return
+
+    # If already logged in and session valid
+    if st.session_state.logged_in and st.session_state.session_token:
+        sess = user_service_mod.get_session(st.session_state.session_token)
+        if sess:
+            st.success(f"Signed in as **{st.session_state.username}**")
+            left, right = st.columns([1, 1])
+            with left:
+                if st.button("Go to Dashboard"):
+                    st.session_state.current_page = "dashboard"
+                    return
+            with right:
+                if st.button("Logout"):
+                    user_service_mod.invalidate_session(st.session_state.session_token)
+                    st.session_state.logged_in = False
+                    st.session_state.username = ""
+                    st.session_state.session_token = None
+                    st.success("Logged out.")
+                    return
+            st.markdown("---")
+            return
+        else:
+            st.warning("Session expired; please sign in again.")
+            st.session_state.logged_in = False
+            st.session_state.username = ""
+            st.session_state.session_token = None
+
+    tab_login, tab_register = st.tabs(["Login", "Register"])
+
+    with tab_login:
+        st.subheader("Sign in")
+        login_user = st.text_input("Username", key="login_user")
+        login_pass = st.text_input("Password", type="password", key="login_pass")
+        if st.button("Sign in"):
+            if user_service_mod.is_account_locked(login_user):
+                st.error("Account temporarily locked due to failed attempts.")
+            else:
+                status, role, token = user_service_mod.login_user(login_user, login_pass)
+                if status == "success":
+                    st.session_state.logged_in = True
+                    st.session_state.username = login_user
+                    st.session_state.session_token = token
+                    st.success("Login successful.")
+                    st.session_state.current_page = "dashboard"
+                    return
+                elif status == "wrong_password":
+                    st.error("Incorrect password.")
+                elif status == "locked":
+                    st.error("Account locked.")
+                else:
+                    st.error("User not found.")
+
+    with tab_register:
+        st.subheader("Create account")
+        reg_user = st.text_input("Choose a username", key="reg_user")
+        reg_pass = st.text_input("Choose a password", type="password", key="reg_pass")
+        reg_confirm = st.text_input("Confirm password", type="password", key="reg_confirm")
+
+        st.markdown("**Password requirements:** 8-50 chars, 1 uppercase, 1 number, 1 special char.")
+        if reg_pass:
+            try:
+                strength = user_service_mod.check_password_strength(reg_pass)
+            except Exception:
+                strength = "unknown"
+            st.info(f"Password strength: {strength}")
+
+        if st.button("Create account"):
+            ok_user, user_msg = user_service_mod.validate_username(reg_user)
+            if not ok_user:
+                st.error(user_msg); return
+            ok_pass, pass_msg = user_service_mod.validate_password(reg_pass)
+            if not ok_pass:
+                st.error(pass_msg); return
+            if reg_pass != reg_confirm:
+                st.error("Passwords do not match."); return
+            created = user_service_mod.register_user(reg_user, reg_pass, role="user")
+            if created:
+                st.success("Account created.")
+            else:
+                st.error("Registration failed (username may exist).")
+
+# -------------------------
+# Dashboard main & sidebar
+# -------------------------
+def show_dashboard():
+    if not st.session_state.logged_in or not st.session_state.session_token:
+        st.error("Please sign in to view the dashboard.")
+        if st.button("Go to sign in"):
+            st.session_state.current_page = "home"
+            return
+        return
+
+    sess = user_service_mod.get_session(st.session_state.session_token)
+    if not sess:
+        st.error("Session invalid/expired. Please sign in again.")
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.session_token = None
+        if st.button("Go to sign in"):
+            st.session_state.current_page = "home"
+            return
+        return
+
+    domain = st.session_state.get("current_domain", "Datasets")
+    st.title(f"{domain} Dashboard")
+    st.caption(f"Signed in as {st.session_state.username}")
+
+    left, right = st.columns([8, 2])
+    with right:
+        if st.button("Logout"):
+            user_service_mod.invalidate_session(st.session_state.session_token)
+            st.session_state.logged_in = False
+            st.session_state.username = ""
+            st.session_state.session_token = None
+            st.session_state.current_page = "home"
+            return
+
+    if domain == "Datasets":
+        datasets_view()
+    elif domain == "Cybersecurity":
+        cybersecurity_view()
+    elif domain == "IT Tickets":
+        tickets_view()
+    else:
+        st.info("Select a valid domain in the sidebar.")
+
+def render_sidebar():
     with st.sidebar:
-        st.title("🔍 Intelligence Platform")
-        st.markdown(f"**Welcome,** `{session['username']}`")
-        st.markdown(f"*Role:* `{session.get('role', 'User')}`")
+        st.header("Navigation")
+        main_page = st.selectbox("Go to:", ["Home", "Dashboard"], index=0 if st.session_state.current_page == "home" else 1)
+        st.session_state.current_page = "home" if main_page == "Home" else "dashboard"
+
+        if st.session_state.current_page == "dashboard":
+            domain = st.selectbox("Domain", ["Datasets", "Cybersecurity", "IT Tickets"], index=["Datasets", "Cybersecurity", "IT Tickets"].index(st.session_state.current_domain))
+            st.session_state.current_domain = domain
+
         st.markdown("---")
-        
-        # Navigation
-        st.subheader("Navigation")
-        nav_options = ["🚨 Incidents", "🎫 Tickets", "📁 Datasets"]
-        
-        # Add admin panel for admin users
-        if session.get("role") == "admin":
-            nav_options.append("⚙️ Admin")
-        
-        nav_options.append("🚪 Logout")
-        
-        choice = st.radio(
-            "Go to:",
-            nav_options,
-            index=0,
-        )
-        
-        st.markdown("---")
-        
-        # Quick Stats (only show if we have data)
-        st.subheader("Quick Stats")
-        try:
-            from app.data.incidents import get_open_incidents_count
-            from app.data.tickets import get_open_tickets_count
-            from app.data.datasets import get_total_datasets_count
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Open Incidents", get_open_incidents_count())
-            with col2:
-                st.metric("Open Tickets", get_open_tickets_count())
-            
-            st.metric("Total Datasets", get_total_datasets_count())
-        except Exception:
-            st.info("Load data to see stats")
-    
-    # Main content area based on navigation choice
-    if choice == "🚨 Incidents":
-        page_incidents()
-    elif choice == "🎫 Tickets":
-        page_tickets()
-    elif choice == "📁 Datasets":
-        page_datasets()
-    elif choice == "⚙️ Admin":
-        page_admin()
-    elif choice == "🚪 Logout":
-        logout()
+        if st.session_state.logged_in:
+            st.write(f"**{st.session_state.username}**")
+            if st.button("Sign out (sidebar)"):
+                try:
+                    user_service_mod.invalidate_session(st.session_state.session_token)
+                except Exception:
+                    pass
+                st.session_state.logged_in = False
+                st.session_state.username = ""
+                st.session_state.session_token = None
+                st.session_state.current_page = "home"
+                return
+        else:
+            st.write("Not signed in")
+
+# -------------------------
+# Main
+# -------------------------
+def main():
+    render_sidebar()
+    if st.session_state.current_page == "home":
+        show_home()
+    else:
+        show_dashboard()
 
 if __name__ == "__main__":
     main()
