@@ -5,11 +5,11 @@ Uses csv_loader functions to reduce database connections.
 
 import sqlite3
 from typing import Optional, List, Dict, Any
-from app.data.db import connect_database
-from app.data.csv_loader import load_csv_to_table, count_table_records
+from database.db import connect_database
+from models.csv_loader import load_csv_to_table, count_table_records
 import pandas as pd
 
-# established sets of allowed values — keeps inputs tidy and predictable
+# established sets of allowed values; keeps inputs tidy and predictable
 VALID_SEVERITIES = ["Low", "Medium", "High", "Critical"]
 VALID_STATUSES = ["Open", "In Progress", "Resolved", "Closed"]
 
@@ -18,7 +18,7 @@ VALID_STATUSES = ["Open", "In Progress", "Resolved", "Closed"]
 
 def create_incident(
     timestamp: str,
-    incident_type: str,
+    category: str,
     severity: str,
     status: str,
     description: str = "",
@@ -30,9 +30,9 @@ def create_incident(
     This function checks the basics first (makes sure required fields are
     present and that severity/status are recognized), then inserts the row.
     """
-    # quick input checks so we fail fast and loud if something is wrong
-    if not all([timestamp, incident_type, severity, status]):
-        raise ValueError("timestamp, incident_type, severity and status are required")
+    # quick input checks so we fail fast and obviously if something is wrong
+    if not all([timestamp, category, severity, status]):
+        raise ValueError("timestamp, category, severity and status are required")
 
     if severity not in VALID_SEVERITIES:
         raise ValueError(f"Invalid severity — must be one of: {', '.join(VALID_SEVERITIES)}")
@@ -46,10 +46,10 @@ def create_incident(
         cur.execute(
             """
             INSERT INTO cyber_incidents
-            (timestamp, incident_type, severity, status, description, reported_by)
+            (timestamp, category, severity, status, description, reported_by)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (timestamp, incident_type, severity, status, description, reported_by),
+            (timestamp, category, severity, status, description, reported_by),
         )
         new_id = cur.lastrowid
         conn.commit()
@@ -84,30 +84,12 @@ def get_incident(incident_id: int) -> Optional[Dict[str, Any]]:
 
 # ---------------------- READ (all) ----------------------
 
-def get_all_incidents(as_dataframe: bool = False):
-    """Return every incident, newest first. Use a DataFrame if you like."""
-    conn = connect_database()
-    try:
-        if as_dataframe:
-            return pd.read_sql_query("SELECT * FROM cyber_incidents ORDER BY timestamp DESC", conn)
-
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM cyber_incidents ORDER BY timestamp DESC")
-        return [dict(r) for r in cur.fetchall()]
-
-    except sqlite3.Error as err:
-        print(f"[incidents] Error reading incidents: {err}")
-        return pd.DataFrame() if as_dataframe else []
-    finally:
-        conn.close()
-
-
 # ---------------------- READ (filtered) ----------------------
 
 def get_incidents_by_filters(
     severity: Optional[str] = None,
     status: Optional[str] = None,
-    incident_type: Optional[str] = None,
+    category: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     as_dataframe: bool = False
@@ -124,9 +106,9 @@ def get_incidents_by_filters(
         if status:
             query += " AND status = ?"
             params.append(status)
-        if incident_type:
-            query += " AND incident_type = ?"
-            params.append(incident_type)
+        if category:
+            query += " AND category = ?"
+            params.append(category)
         if date_from:
             query += " AND timestamp >= ?"
             params.append(date_from)
@@ -155,7 +137,7 @@ def get_incidents_by_filters(
 def update_incident(
     incident_id: int,
     timestamp: Optional[str] = None,
-    incident_type: Optional[str] = None,
+    category: Optional[str] = None,
     severity: Optional[str] = None,
     status: Optional[str] = None,
     description: Optional[str] = None,
@@ -168,9 +150,9 @@ def update_incident(
     if timestamp is not None:
         updates.append("timestamp = ?")
         params.append(timestamp)
-    if incident_type is not None:
-        updates.append("incident_type = ?")
-        params.append(incident_type)
+    if category is not None:
+        updates.append("category = ?")
+        params.append(category)
     if severity is not None:
         if severity not in VALID_SEVERITIES:
             raise ValueError(f"Invalid severity — must be one of: {', '.join(VALID_SEVERITIES)}")
@@ -231,39 +213,12 @@ def delete_incident(incident_id: int) -> bool:
 
 # ---------------------- BULK (CSV loader) ----------------------
 
-def load_incidents_from_csv(csv_path: str, clear_table: bool = True) -> int:
-    """Load incidents from CSV using the shared csv_loader (this keeps the DB tidy)."""
-    return load_csv_to_table(csv_path, "cyber_incidents", clear_table=clear_table)
-
-
 def get_total_incidents_count() -> int:
     """Return the total number of incidents using the csv loader helper."""
     return count_table_records("cyber_incidents")
 
 
 # ---------------------- ANALYTICS ----------------------
-
-def get_incident_count_by_severity() -> Dict[str, int]:
-    """Count incidents grouped by severity."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT severity, COUNT(*) AS count FROM cyber_incidents GROUP BY severity")
-        return {row['severity']: row['count'] for row in cur.fetchall()}
-    finally:
-        conn.close()
-
-
-def get_incident_count_by_status() -> Dict[str, int]:
-    """Count incidents grouped by status."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT status, COUNT(*) AS count FROM cyber_incidents GROUP BY status")
-        return {row['status']: row['count'] for row in cur.fetchall()}
-    finally:
-        conn.close()
-
 
 def get_all_incident_analytics() -> Dict[str, Any]:
     """Return a small analytics bundle in one database connection."""
@@ -289,23 +244,6 @@ def get_all_incident_analytics() -> Dict[str, Any]:
     finally:
         conn.close()
 
-
-def get_open_incidents_count() -> int:
-    """Return the number of open incidents (delegates to analytics helper)."""
-    return get_all_incident_analytics()['open_incidents']
-
-
-def get_recent_incidents(limit: int = 10) -> List[Dict[str, Any]]:
-    """Return recent incidents ordered by timestamp desc."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM cyber_incidents ORDER BY timestamp DESC LIMIT ?", (limit,))
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
-
-
 # ---------------------- SELF TEST ----------------------
 
 def _test_incidents_module():
@@ -314,7 +252,7 @@ def _test_incidents_module():
 
     inc_id = create_incident(
         timestamp="2024-01-01",
-        incident_type="Phishing",
+        category="Phishing",
         severity="High",
         status="Open",
         description="Test phishing attempt",

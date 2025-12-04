@@ -1,6 +1,6 @@
 # schema.py
 from typing import Optional
-from app.data.db import connect_database
+from database.db import connect_database
 
 CREATE_USERS = """
 CREATE TABLE IF NOT EXISTS users (

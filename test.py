@@ -1,6 +1,6 @@
 # test.py 
-from app.data.schema import init_schema
-from app.data.csv_loader import load_all_csv_data, verify_data_loading
+from database.schema import init_schema
+from app.models.csv_loader import load_all_csv_data, verify_data_loading
 
 print("Starting database setup...")
 init_schema()
@@ -12,10 +12,10 @@ print("All done! ")
 
 
 import os
-from app.data.schema import init_schema
-from app.data.csv_loader import load_all_csv_data, verify_data_loading
+from database.schema import init_schema
+from app.models.csv_loader import load_all_csv_data, verify_data_loading
 from app.services.user_service import migrate_users_from_file
-from app.data.db import connect_database
+from database.db import connect_database
 
 def main():
     print(" Initializing database schema...")

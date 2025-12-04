@@ -1,7 +1,7 @@
 """
-CSV loader
+CSV loader; made this to facilitate csv implementations
 
-Features:
+Features include:
 - Allowed table validation (prevents accidental writes)
 - Header validation against DB table columns
 - Batch inserts via executemany() inside a transaction
@@ -14,9 +14,9 @@ from pathlib import Path
 import csv
 import sqlite3
 from typing import List, Tuple, Optional, Any
-from app.data.db import connect_database
+from database.db import connect_database
 
-# start by defining the allowed target tables to avoid accidental SQL injection via table names
+# we start by defining the allowed target tables to avoid accidental SQL injection via table names
 _ALLOWED_TABLES = {"cyber_incidents", "datasets_metadata", "it_tickets", "users"}
 
 
@@ -34,23 +34,6 @@ def _get_table_columns(conn: sqlite3.Connection, table_name: str) -> List[str]:
 
 
 # --- coercion helpers ---
-
-def _normalize_date(d: str) -> str:
-    """Conerts a few common date formats and return ISO YYYY-MM-DD.
-
-    If nothing matches, return the original string so we don't crash on odd
-    inputs. It prints a warning when normalization fails.
-    """
-    from datetime import datetime
-    d = (d or "").strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(d, fmt).date().isoformat()
-        except Exception:
-            pass
-    # nothing matched — return original (caller may accept it)
-    return d
-
 
 def _coerce_value(col: str, raw: Optional[str]) -> Any:
     """Coerce a raw CSV string into an appropriate Python type.
@@ -76,20 +59,12 @@ def _coerce_value(col: str, raw: Optional[str]) -> Any:
                 print(f"[csv_loader] Warning: could not convert {col}={raw!r} to int; leaving as text")
                 return raw
 
-    # known-float columns
-    if col in ("file_size_mb",):
-        try:
-            return float(raw)
-        except ValueError:
-            print(f"[csv_loader] Warning: could not convert {col}={raw!r} to float; leaving as text")
-            return raw
-
     # date-like columns
     if col in ("created_date", "resolved_date", "last_updated", "upload_date", "date"):
         normalized = _normalize_date(raw)
         if normalized != raw:
             return normalized
-        # if normalization didn't change the value, return normalized anyway
+        # if the normalization didn't change the value, return normalized anyway
         return normalized
 
     # default: return the cleaned string
@@ -209,7 +184,7 @@ def load_all_csv_data(data_dir: str = "DATA", db_path: Optional[str] = None, cle
 
 
 def count_table_records(table_name: str, db_path: Optional[str] = None) -> int:
-    """Return number of records in a table."""
+    """Returns the number of records in a table."""
     _validate_table_name(table_name)
     conn = connect_database(db_path)
     try:
@@ -220,26 +195,15 @@ def count_table_records(table_name: str, db_path: Optional[str] = None) -> int:
         conn.close()
 
 
-def verify_data_loading(db_path: Optional[str] = None):
-    """Print counts for the three main tables so we can check loading worked."""
-    tables = ["cyber_incidents", "datasets_metadata", "it_tickets"]
-    print("\n[csv_loader] Verifying data loading...")
-    for t in tables:
-        try:
-            cnt = count_table_records(t, db_path=db_path)
-            print(f"  {t}: {cnt} records")
-        except Exception as e:
-            print(f"  {t}: error ({e})")
+# THIS IS LEFTOVER TEST CODE; IGNORE
+# if __name__ == "__main__":
+#     # initialize schema if available
+#     try:
+#         from .schema import init_schema
+#         init_schema()
+#     except Exception:
+#         # schema may exist already; ignore errors here
+#         pass
 
-
-if __name__ == "__main__":
-    # initialize schema if available
-    try:
-        from .schema import init_schema
-        init_schema()
-    except Exception:
-        # schema may exist already; ignore errors here
-        pass
-
-    load_all_csv_data()
-    verify_data_loading()
+#     load_all_csv_data()
+#     verify_data_loading()

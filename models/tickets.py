@@ -5,8 +5,8 @@ IT tickets module; same as incidents,py
 import sqlite3
 from typing import Optional, List, Dict, Any
 from datetime import date
-from app.data.db import connect_database
-from app.data.csv_loader import load_csv_to_table, count_table_records
+from database.db import connect_database
+from models.csv_loader import load_csv_to_table, count_table_records
 import pandas as pd
 
 # established sets of allowed values — keeps inputs tidy and predictable
@@ -109,79 +109,6 @@ def get_ticket_by_ticket_id(ticket_id: str) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
-
-# ---------------------- READ (all) ----------------------
-
-def get_all_tickets(as_dataframe: bool = False):
-    """Return every ticket, newest first. Dataframe use if user wants to."""
-    conn = connect_database()
-    try:
-        if as_dataframe:
-            return pd.read_sql_query("SELECT * FROM it_tickets ORDER BY created_at DESC", conn)
-
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM it_tickets ORDER BY created_at DESC")
-        return [dict(r) for r in cur.fetchall()]
-
-    except sqlite3.Error as err:
-        print(f"[tickets] Error reading tickets: {err}")
-        return pd.DataFrame() if as_dataframe else []
-    finally:
-        conn.close()
-
-
-# ---------------------- READ (filtered) ----------------------
-
-def get_tickets_by_filters(
-    priority: Optional[str] = None,
-    status: Optional[str] = None,
-    category: Optional[str] = None,
-    assigned_to: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    as_dataframe: bool = False,
-):
-    """Finds tickets using optional filters. Returns a list of dicts or a DataFrame."""
-    conn = connect_database()
-    try:
-        query = "SELECT * FROM it_tickets WHERE 1=1"
-        params: List[Any] = []
-
-        if priority:
-            query += " AND priority = ?"
-            params.append(priority)
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-        if category:
-            query += " AND category = ?"
-            params.append(category)
-        if assigned_to:
-            query += " AND assigned_to = ?"
-            params.append(assigned_to)
-        if date_from:
-            query += " AND created_at >= ?"
-            params.append(date_from)
-        if date_to:
-            query += " AND created_at <= ?"
-            params.append(date_to)
-
-        query += " ORDER BY created_at DESC"
-
-        if as_dataframe:
-            return pd.read_sql_query(query, conn, params=params)
-
-        cur = conn.cursor()
-        cur.execute(query, params)
-        return [dict(r) for r in cur.fetchall()]
-
-    except sqlite3.Error as err:
-        print(f"[tickets] Error filtering tickets: {err}")
-        return pd.DataFrame() if as_dataframe else []
-    finally:
-        conn.close()
-
-
 # ---------------------- UPDATE ----------------------
 
 def update_ticket(
@@ -225,7 +152,7 @@ def update_ticket(
         params.append(assigned_to)
 
     if not updates:
-        # nothing to update — caller passed no fields
+        # nothing to update; caller has passed no fields
         return False
 
     params.append(db_id)
@@ -267,50 +194,11 @@ def delete_ticket(db_id: int) -> bool:
 
 # ---------------------- BULK (CSV loader) ----------------------
 
-def load_tickets_from_csv(csv_path: str, clear_table: bool = True) -> int:
-    """Loads tickets from CSV using the shared csv_loader (this keeps the DB tidy)."""
-    return load_csv_to_table(csv_path, "it_tickets", clear_table=clear_table)
-
-
 def get_total_tickets_count() -> int:
     """Returns the total number of tickets using the csv loader helper."""
     return count_table_records("it_tickets")
 
-
 # ---------------------- ANALYTICS ----------------------
-
-def get_ticket_count_by_priority() -> Dict[str, int]:
-    """Counts tickets grouped by priority level."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT priority, COUNT(*) AS count FROM it_tickets GROUP BY priority")
-        return {row['priority']: row['count'] for row in cur.fetchall()}
-    finally:
-        conn.close()
-
-
-def get_ticket_count_by_status() -> Dict[str, int]:
-    """Counts tickets grouped by current status."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT status, COUNT(*) AS count FROM it_tickets GROUP BY status")
-        return {row['status']: row['count'] for row in cur.fetchall()}
-    finally:
-        conn.close()
-
-
-def get_ticket_count_by_assigned_to() -> Dict[str, int]:
-    """Counts tickets grouped by assigned support person."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT assigned_to, COUNT(*) AS count FROM it_tickets GROUP BY assigned_to")
-        return {row['assigned_to']: row['count'] for row in cur.fetchall()}
-    finally:
-        conn.close()
-
 
 def get_all_ticket_analytics() -> Dict[str, Any]:
     """Return a complete analytics bundle in one database connection."""
@@ -341,12 +229,6 @@ def get_all_ticket_analytics() -> Dict[str, Any]:
     finally:
         conn.close()
 
-
-def get_open_tickets_count() -> int:
-    """Return the number of open/in-progress tickets."""
-    return get_all_ticket_analytics()['open_tickets']
-
-
 def get_recent_tickets(limit: int = 10) -> List[Dict[str, Any]]:
     """Return recent tickets ordered by creation date."""
     conn = connect_database()
@@ -356,7 +238,6 @@ def get_recent_tickets(limit: int = 10) -> List[Dict[str, Any]]:
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
-
 
 def get_high_priority_open_tickets() -> List[Dict[str, Any]]:
     """Return all high/critical priority tickets that are still open."""
@@ -377,29 +258,29 @@ def get_high_priority_open_tickets() -> List[Dict[str, Any]]:
 
 
 # ---------------------- SELF TEST ----------------------
+# This was a test; it is now not needed
+# def _test_tickets_module():
+#     """Quick manual test to run from the command line."""
+#     print("tickets module quick test")
 
-def _test_tickets_module():
-    """Quick manual test to run from the command line."""
-    print("tickets module quick test")
+#     db_id = create_ticket(
+#         ticket_id="TEST-2024-001",
+#         priority="Medium",
+#         status="Open",
+#         category="Software",
+#         subject="Test ticket creation",
+#         description="Testing the ticket creation function",
+#         assigned_to="IT_Support_A"
+#     )
+#     print("Created ticket (db id):", db_id)
 
-    db_id = create_ticket(
-        ticket_id="TEST-2024-001",
-        priority="Medium",
-        status="Open",
-        category="Software",
-        subject="Test ticket creation",
-        description="Testing the ticket creation function",
-        assigned_to="IT_Support_A"
-    )
-    print("Created ticket (db id):", db_id)
-
-    print("Fetch by db id:", get_ticket(db_id))
-    print("Fetch by ticket_id:", get_ticket_by_ticket_id("TEST-2024-001"))
-    print("Total tickets count:", get_total_tickets_count())
-    print("Analytics bundle:", get_all_ticket_analytics())
-    print("High priority open tickets:", len(get_high_priority_open_tickets()))
-    print("Delete:", delete_ticket(db_id))
+#     print("Fetch by db id:", get_ticket(db_id))
+#     print("Fetch by ticket_id:", get_ticket_by_ticket_id("TEST-2024-001"))
+#     print("Total tickets count:", get_total_tickets_count())
+#     print("Analytics bundle:", get_all_ticket_analytics())
+#     print("High priority open tickets:", len(get_high_priority_open_tickets()))
+#     print("Delete:", delete_ticket(db_id))
 
 
-if __name__ == "__main__":
-    _test_tickets_module()
+# if __name__ == "__main__":
+#     _test_tickets_module()

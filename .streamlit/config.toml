@@ -1,0 +1,15 @@
+[theme]
+# Accent / primary buttons, charts, links
+primaryColor = "#0B69A3"
+
+# App background (main canvas)
+backgroundColor = "#FFFFFF"
+
+# Panels, sidebar, cards — a soft neutral so UI elements stand out gently
+secondaryBackgroundColor = "#F4F6F8"
+
+# Main text color (high contrast on white)
+textColor = "#0E1B2B"
+
+# Choose from: "sans serif", "serif", "monospace"
+font = "sans serif"

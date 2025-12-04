@@ -5,8 +5,8 @@ Same as incidents.py; slight adjustments to accomodate for the dataset
 
 import sqlite3
 from typing import Optional, List, Dict, Any
-from app.data.db import connect_database
-from app.data.csv_loader import load_csv_to_table, count_table_records
+from database.db import connect_database
+from models.csv_loader import load_csv_to_table, count_table_records
 import pandas as pd
 
 
@@ -69,22 +69,6 @@ def get_dataset(dataset_id: int) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
-
-def get_dataset_by_name(name: str) -> Optional[Dict[str, Any]]:
-    """Fetch a dataset by its name (returns dict or None)."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM datasets_metadata WHERE name = ?", (name,))
-        row = cur.fetchone()
-        return dict(row) if row else None
-    except sqlite3.Error as err:
-        print(f"[datasets] Error retrieving dataset '{name}': {err}")
-        return None
-    finally:
-        conn.close()
-
-
 # ---------------------- READ (all / filtered) ----------------------
 
 def get_all_datasets(as_dataframe: bool = False):
@@ -143,63 +127,6 @@ def get_datasets_by_filters(
         conn.close()
 
 
-# ---------------------- UPDATE ----------------------
-
-def update_dataset(
-    dataset_id: int,
-    name: Optional[str] = None,
-    rows: Optional[int] = None,
-    columns: Optional[int] = None,
-    uploaded_by: Optional[str] = None,
-    upload_date: Optional[str] = None,
-) -> bool:
-    """Updates any provided fields on a dataset. Returns True on success."""
-    updates: List[str] = []
-    params: List[Any] = []
-
-    if name is not None:
-        updates.append("name = ?")
-        params.append(name)
-    if rows is not None:
-        if rows < 0:
-            raise ValueError("rows must be non-negative")
-        updates.append("rows = ?")
-        params.append(rows)
-    if columns is not None:
-        if columns < 0:
-            raise ValueError("columns must be non-negative")
-        updates.append("columns = ?")
-        params.append(columns)
-    if uploaded_by is not None:
-        updates.append("uploaded_by = ?")
-        params.append(uploaded_by)
-    if upload_date is not None:
-        updates.append("upload_date = ?")
-        params.append(upload_date)
-
-    if not updates:
-        # nothing to do; caller passed no fields
-        return False
-
-    params.append(dataset_id)
-
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        sql = f"UPDATE datasets_metadata SET {', '.join(updates)} WHERE id = ?"
-        cur.execute(sql, params)
-        conn.commit()
-        return cur.rowcount > 0
-
-    except sqlite3.Error as err:
-        conn.rollback()
-        print(f"[datasets] Error updating dataset {dataset_id}: {err}")
-        return False
-
-    finally:
-        conn.close()
-
-
 # ---------------------- DELETE ----------------------
 
 def delete_dataset(dataset_id: int) -> bool:
@@ -220,34 +147,12 @@ def delete_dataset(dataset_id: int) -> bool:
 
 # ---------------------- BULK (CSV loader) ----------------------
 
-def load_datasets_from_csv(csv_path: str, clear_table: bool = True) -> int:
-    """Load datasets from CSV using shared csv_loader (helps to keep DB connections tidy)."""
-    return load_csv_to_table(csv_path, "datasets_metadata", clear_table=clear_table)
-
-
 def get_total_datasets_count() -> int:
     """Return the total number of dataset rows using the csv loader helper."""
     return count_table_records("datasets_metadata")
 
 
 # ---------------------- ANALYTICS ----------------------
-
-def get_dataset_count_by_uploaded_by() -> Dict[str, int]:
-    """Count datasets grouped by uploader."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT uploaded_by, COUNT(*) AS count
-            FROM datasets_metadata
-            GROUP BY uploaded_by
-            """
-        )
-        return {row['uploaded_by']: row['count'] for row in cur.fetchall()}
-    finally:
-        conn.close()
-
 
 def get_all_analytics() -> Dict[str, Any]:
     """Return a small analytics bundle in one DB connection (fast and tidy)."""
@@ -269,25 +174,6 @@ def get_all_analytics() -> Dict[str, Any]:
 
     finally:
         conn.close()
-
-
-def get_recent_datasets(limit: int = 10) -> List[Dict[str, Any]]:
-    """Returns the most recently updated datasets as a list of dicts."""
-    conn = connect_database()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT * FROM datasets_metadata
-            ORDER BY upload_date DESC
-            LIMIT ?
-            """,
-            (limit,)
-        )
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
-
 
 # ---------------------- SELF TEST ----------------------
 

@@ -1,7 +1,7 @@
 import bcrypt
 # USER_DATA_FILE = "users.txt"  - migration completed
-from app.data.db import connect_database
-from app.data.users import get_user_by_username, insert_user, update_user
+from database.db import connect_database
+from models.users import get_user_by_username, insert_user, update_user
 import sqlite3
 import secrets
 from datetime import datetime, timedelta
@@ -147,6 +147,25 @@ def invalidate_session(token: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+def session_user_role(token: str) -> str | None:
+    if not token:
+        return None
+    sess = get_session(token)
+    if not sess:
+        return None
+    username = sess.get("username")
+    if not username:
+        return None
+    user = get_user_by_username(username)
+    if not user:
+        return None
+    return user.get("role") or None
+
+def require_role(token: str, allowed_roles: list[str]) -> bool:
+    """Return True if session token belongs to user with role in allowed_roles."""
+    role = session_user_role(token)
+    return role in allowed_roles if role else False
 
 # --------------------
 # Account lock 
