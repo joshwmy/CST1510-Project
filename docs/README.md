@@ -80,6 +80,7 @@ CST1510 CW2/
 ├── main.py
 ├── requirements.txt
 └── test.py
+```
 
 ## How to Run the Project
 
