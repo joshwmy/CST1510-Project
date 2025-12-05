@@ -707,7 +707,7 @@ def show_home():
                     st.session_state.username = ""
                     st.session_state.session_token = None
                     st.success("Logged out.")
-                    return
+                    st.rerun()
             st.markdown("---")
             return
         else:
@@ -731,9 +731,11 @@ def show_home():
                     st.session_state.logged_in = True
                     st.session_state.username = login_user
                     st.session_state.session_token = token
-                    st.success("Login successful.")
                     st.session_state.current_page = "dashboard"
-                    return
+                    st.success("Login successful.")
+                    # ensure UI (sidebar + nav) updates immediately
+                    st.rerun()
+
                 elif status == "wrong_password":
                     st.error("Incorrect password.")
                 elif status == "locked":
@@ -804,7 +806,7 @@ def show_dashboard():
             st.session_state.username = ""
             st.session_state.session_token = None
             st.session_state.current_page = "home"
-            return
+            st.rerun()
 
     if domain == "Datasets":
         datasets_view()
