@@ -1,5 +1,5 @@
 import bcrypt
-# USER_DATA_FILE = "users.txt"  - migration completed
+import re
 from database.db import connect_database
 from models.users import get_user_by_username, insert_user, update_user
 import sqlite3
@@ -176,7 +176,7 @@ def is_account_locked(username: str) -> bool:
     if not user:
         return False
 
-    locked_until = user["locked_until"] if "locked_until" in user.keys() else user[5]
+    locked_until = user.get("locked_until") if isinstance(user, dict) else user[5]
     
     if not locked_until:
         return False
@@ -197,7 +197,7 @@ def record_failed_attempt(username: str) -> None:
     if not user:
         return
 
-    failed = user["failed_attempts"] if "failed_attempts" in user.keys() else user[4]
+    failed = user.get("failed_attempts") if isinstance(user, dict) else user[4]
     new_attempts = (failed or 0) + 1
 
     if new_attempts >= LOCK_THRESHOLD:
@@ -209,8 +209,8 @@ def record_failed_attempt(username: str) -> None:
 
 
 def clear_lock(username: str) -> None:
-    """Reset failed attempts."""
-    update_user(username, failed_attempts=0, locked_until=None)
+    """Reset failed attempts and clear lock by setting locked_until to NULL."""
+    update_user(username, failed_attempts=0, locked_until="")
 
 # --------------
 # Login
@@ -234,7 +234,7 @@ def user_exists(username):
 
 def login_user(username, password):
     '''
-    Authenticates a user by verifying their username and password. If the wrong password is input 3 times, the user will be locked out for 5 minutes
+    Authenticates a user by verifying their username and password. If the wrong password is input 3 times, the user will be locked out for 15 minutes
     until next attempt.
 
     Args:
@@ -243,19 +243,19 @@ def login_user(username, password):
 
     Returns:
        tuple, where:
-            - status (str): One of "success", "wrong_password", or "user_not_found".
+            - status (str): One of "success", "wrong_password", "locked", or "user_not_found".
             - role (str or None): The user's role if authentication succeeds, otherwise `None`.
             - token (str or None): string session token if login worked, otherwise None
     '''
     try:
         # Get user data using function from users.py
-        user = get_user_by_username(username)       # connection no1
+        user = get_user_by_username(username)
         
         if not user:
             return "user_not_found", None, None
         
-        # Check if the account is locked
-        locked_until = user["locked_until"] if "locked_until" in user.keys() else user[5]
+        # Check if the account is locked BEFORE attempting password verification
+        locked_until = user.get("locked_until") if isinstance(user, dict) else user[5]
         if locked_until:
             lock_time = datetime.fromisoformat(locked_until)
             if datetime.now() < lock_time:
@@ -263,23 +263,23 @@ def login_user(username, password):
             else:
                 # Lock expired, clear it
                 clear_lock(username)
+                # Refresh user data after clearing lock
+                user = get_user_by_username(username)
 
-        # Extract password_hash and role from user tuple
-        # The tuple structure is: (id, username, password_hash, role)
-        stored_hash = user["password_hash"] if "password_hash" in user.keys() else user[2]      # password_hash is at index 2
-        stored_role = user["role"] if "role" in user.keys() else user[3]                    # role is at index 3
+        # Extract password_hash and role from user
+        stored_hash = user.get("password_hash") if isinstance(user, dict) else user[2]
+        stored_role = user.get("role") if isinstance(user, dict) else user[3]
         
         # Verify the password using bcrypt function
         if verify_password(password, stored_hash):
-            # when success; clear lock and create session
-            clear_lock(username)  # Connection no 2
-            token = create_session(username)  # Connection no3 (sessions table)
+            # Success: clear any failed attempts and lock
+            clear_lock(username)
+            token = create_session(username)
             return "success", stored_role, token
         else:
-            # when incorrect; record attempt 
-            record_failed_attempt(username)  # Connection no2
+            # Incorrect password: record attempt
+            record_failed_attempt(username)
             return "wrong_password", None, None
-
             
     except sqlite3.Error as e:
         print(f"Database error during login: {e}")
@@ -327,7 +327,7 @@ def migrate_users_from_file(conn, filepath="DATA/users.txt"):
 # ---------------------
 def validate_username(username):
     '''
-    Validates username format.
+    Validates username format using regex.
 
     Args:
         username (str): The username to validate
@@ -346,15 +346,15 @@ def validate_username(username):
     if len(username) > 20:
         return False, "Username must be no more than 20 characters long."
 
-    # Only letters, numbers, underscores allowed
-    if not all(char.isalnum() or char == "_" for char in username):
+    # Only letters, numbers, underscores allowed - using regex
+    if not re.match(r'^[a-zA-Z0-9_]+$', username):
         return False, "Username may only contain letters, numbers, and underscores (no spaces or symbols)."
 
     return True, ""
 
 def validate_password(password):
     '''
-    Validates password strength.
+    Validates password strength using regex.
 
      Args:
         password (str): The password to validate.
@@ -376,26 +376,24 @@ def validate_password(password):
     if len(password) > 50:
         return False, "Password must be no more than 50 characters long"
     
-    # Checks for at least one uppercase letter
-    if not any(char.isupper() for char in password):
+    # Checks for at least one uppercase letter using regex
+    if not re.search(r'[A-Z]', password):
         return False, "Password must contain at least one uppercase letter"
     
-    # Checks for at least one number
-    if not any(char.isdigit() for char in password):
+    # Checks for at least one number using regex
+    if not re.search(r'\d', password):
         return False, "Password must contain at least one number"
     
-    # Checks for at least one special character
-    special_chars = "!@#$%^&*()_+-=[]{}|;:,.<>?"
-    if not any(char in special_chars for char in password):
+    # Checks for at least one special character using regex
+    if not re.search(r'[!@#$%^&*()\-_=+\[\]{}|;:,.<>?]', password):
         return False, "Password must contain at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)"
-    
     
     # All checks passed
     return True, ""
 
 def check_password_strength(password):
     '''
-    Evaluates password strength.
+    Evaluates password strength using regex.
 
    Returns:
         str: "Weak", "Medium", or "Strong"
@@ -408,14 +406,14 @@ def check_password_strength(password):
     if len(password) >= 12:
         score += 1
 
-    # Scoring for varied use of characters
-    if any(c.islower() for c in password):
+    # Scoring for varied use of characters using regex
+    if re.search(r'[a-z]', password):  # lowercase
         score += 1
-    if any(c.isupper() for c in password):
+    if re.search(r'[A-Z]', password):  # uppercase
         score += 1
-    if any(c.isdigit() for c in password):
+    if re.search(r'\d', password):  # digit
         score += 1
-    if any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password):
+    if re.search(r'[!@#$%^&*()\-_=+\[\]{}|;:,.<>?]', password):  # special char
         score += 1
 
     # Convert score into strength rating
@@ -425,4 +423,69 @@ def check_password_strength(password):
         return "Medium"
     else:
         return "Strong"
+    
 
+# ------------------
+# Permission Checking (RBAC)
+# ------------------
+
+def check_permission(user_role, domain, action):
+    """
+    Check if a user can do something in a domain.
+    
+    Args:
+        user_role: The user's role (admin, datasets_admin, etc.)
+        domain: Which domain (Datasets, Cybersecurity, IT Tickets)
+        action: What they want to do (view, create, edit, delete)
+    
+    Returns:
+        True if allowed, False if not
+    """
+    
+    # Admin can do everything
+    if user_role == "admin":
+        return True
+    
+    # Regular users can only view
+    if user_role == "user":
+        if action == "view":
+            return True
+        else:
+            return False
+    
+    # Domain admins can do anything in their domain
+    if domain == "Datasets" and user_role == "datasets_admin":
+        return True
+    
+    if domain == "Cybersecurity" and user_role == "cybersecurity_admin":
+        return True
+    
+    if domain == "IT Tickets" and user_role == "it_admin":
+        return True
+    
+    # Domain admins can view other domains
+    if action == "view" and user_role in ["datasets_admin", "cybersecurity_admin", "it_admin"]:
+        return True
+    
+    # If nothing matches, deny access
+    return False
+
+
+def can_create(user_role, domain):
+    """Check if user can create items in a domain"""
+    return check_permission(user_role, domain, "create")
+
+
+def can_edit(user_role, domain):
+    """Check if user can edit items in a domain"""
+    return check_permission(user_role, domain, "edit")
+
+
+def can_delete(user_role, domain):
+    """Check if user can delete items in a domain"""
+    return check_permission(user_role, domain, "delete")
+
+
+def can_view(user_role, domain):
+    """Check if user can view items in a domain"""
+    return check_permission(user_role, domain, "view")

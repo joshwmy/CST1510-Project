@@ -13,7 +13,11 @@ Features include:
 from pathlib import Path
 import csv
 import sqlite3
-from typing import List, Tuple, Optional, Any
+from typing import List, Tuple, Optional, Any, Dict
+import pandas as pd
+import time
+import os
+from datetime import date
 from database.db import connect_database
 
 # we start by defining the allowed target tables to avoid accidental SQL injection via table names
@@ -33,15 +37,46 @@ def _get_table_columns(conn: sqlite3.Connection, table_name: str) -> List[str]:
     return [row[1] for row in rows]  # row[1] = column name
 
 
+def _normalize_date(raw: str) -> str:
+    """Try to normalize date strings to ISO format."""
+    if not raw:
+        return raw
+    raw = raw.strip()
+    
+    # Already looks like ISO date
+    if len(raw) >= 10 and raw[4] == '-' and raw[7] == '-':
+        return raw
+    
+    # Try to parse common date formats
+    import re
+    from datetime import datetime
+    
+    # Try various formats
+    formats = [
+        '%Y-%m-%d %H:%M:%S',
+        '%m/%d/%Y %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S',
+        '%Y/%m/%d %H:%M:%S',
+        '%d-%m-%Y %H:%M:%S',
+        '%Y-%m-%d',
+        '%m/%d/%Y',
+        '%d/%m/%Y'
+    ]
+    
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.isoformat()
+        except ValueError:
+            continue
+    
+    # If we can't parse it, return as-is
+    return raw
+
 # --- coercion helpers ---
 
 def _coerce_value(col: str, raw: Optional[str]) -> Any:
-    """Coerce a raw CSV string into an appropriate Python type.
-
-    This is intentionally simple and based on expected column names in this
-    project. If coercion fails we return the original string and print a
-    gentle warning. That way the loader is helpful, not brittle.
-    """
+    """Coerce a raw CSV string into an appropriate Python type."""
     if raw is None:
         return None
     raw = raw.strip()
@@ -49,7 +84,7 @@ def _coerce_value(col: str, raw: Optional[str]) -> Any:
         return None
 
     # known-int columns
-    if col in ("record_count",):
+    if col in ("record_count", "rows", "columns"):
         try:
             return int(raw)
         except ValueError:
@@ -60,16 +95,14 @@ def _coerce_value(col: str, raw: Optional[str]) -> Any:
                 return raw
 
     # date-like columns
-    if col in ("created_date", "resolved_date", "last_updated", "upload_date", "date"):
+    if col in ("created_date", "resolved_date", "last_updated", "upload_date", "date", "timestamp", "created_at"):
         normalized = _normalize_date(raw)
         if normalized != raw:
             return normalized
-        # if the normalization didn't change the value, return normalized anyway
         return normalized
 
     # default: return the cleaned string
     return raw
-
 
 def load_csv_to_table(csv_file_path: str,
                       table_name: str,
@@ -77,9 +110,6 @@ def load_csv_to_table(csv_file_path: str,
                       clear_table: bool = True) -> int:
     """
     Load data from a CSV file into a SQLite table using a single transaction and executemany.
-
-    This update performs coercion so numeric columns become numbers
-    and date columns are normalized, which avoids many subtle bugs later on.
     """
     _validate_table_name(table_name)
     csv_path = Path(csv_file_path)
@@ -88,7 +118,7 @@ def load_csv_to_table(csv_file_path: str,
         print(f"[csv_loader] CSV file not found: {csv_path}")
         return 0
 
-    conn = connect_database(db_path)  # connect_database can accept optional path
+    conn = connect_database(db_path)
     try:
         # fetch DB columns and verify
         db_cols = _get_table_columns(conn, table_name)
@@ -156,7 +186,6 @@ def load_csv_to_table(csv_file_path: str,
     finally:
         conn.close()
 
-
 def load_all_csv_data(data_dir: str = "DATA", db_path: Optional[str] = None, clear_table: bool = True):
     """Load the expected CSVs into their respective tables.
 
@@ -182,7 +211,6 @@ def load_all_csv_data(data_dir: str = "DATA", db_path: Optional[str] = None, cle
     print("[csv_loader] Data loading complete.")
     return results
 
-
 def count_table_records(table_name: str, db_path: Optional[str] = None) -> int:
     """Returns the number of records in a table."""
     _validate_table_name(table_name)
@@ -195,6 +223,130 @@ def count_table_records(table_name: str, db_path: Optional[str] = None) -> int:
         conn.close()
 
 
+# -------------------------
+# CSV Upload Handlers
+# -------------------------
+# -------------------------
+# CSV Upload Handlers - FIXED VERSION
+# -------------------------
+def handle_csv_upload(uploaded_file, domain: str, username: str):
+    """
+    Process uploaded CSV files for different domains.
+    Import modules HERE to avoid circular imports.
+    """
+    try:
+        # Read the CSV file
+        df = pd.read_csv(uploaded_file)
+        
+        # Import modules locally to avoid circular dependency
+        if domain == "Datasets":
+            from models import datasets as datasets_mod
+            return handle_dataset_upload(df, username, uploaded_file.name, datasets_mod)
+        elif domain == "Cybersecurity":
+            from models import incidents as incidents_mod
+            return handle_incident_upload(df, username, uploaded_file.name, incidents_mod)
+        elif domain == "IT Tickets":
+            from models import tickets as tickets_mod
+            return handle_ticket_upload(df, username, uploaded_file.name, tickets_mod)
+        else:
+            return False, f"Unknown domain: {domain}"
+            
+    except Exception as e:
+        return False, f"Error reading CSV: {str(e)}"
+
+
+def handle_dataset_upload(df, username, filename, datasets_mod):
+    """Create dataset entry from uploaded CSV."""
+    try:
+        dataset_name = os.path.splitext(filename)[0]
+        upload_date = date.today().isoformat()
+
+        created = datasets_mod.create_dataset(
+            name=dataset_name,
+            rows=len(df),
+            columns=len(df.columns),
+            uploaded_by=username or "unknown",
+            upload_date=upload_date
+        )
+        if created == -1:
+            return False, f"Dataset creation failed for '{dataset_name}' (db error)."
+        return True, f"Dataset '{dataset_name}' created with {len(df)} rows (id {created})"
+    except Exception as e:
+        return False, f"Error creating dataset: {str(e)}"
+
+
+def handle_incident_upload(df, username, filename, incidents_mod):
+    """Create incidents from uploaded CSV."""
+    try:
+        created_count = 0
+        errors = []
+        
+        for idx, row in df.iterrows():
+            try:
+                new_id = incidents_mod.create_incident(
+                    timestamp=row.get('timestamp', time.strftime("%Y-%m-%d %H:%M:%S")),
+                    category=row.get('category', 'Unknown'),
+                    severity=row.get('severity', 'Medium'),
+                    status=row.get('status', 'Open'),
+                    description=row.get('description', f'Uploaded from {filename}'),
+                    reported_by=row.get('reported_by', username)
+                )
+                if new_id != -1:
+                    created_count += 1
+            except Exception as e:
+                errors.append(f"Row {idx}: {str(e)}")
+        
+        message = f"Created {created_count} incidents from CSV"
+        if errors:
+            message += f". Errors: {', '.join(errors[:3])}"
+        return True, message
+    except Exception as e:
+        return False, f"Error processing incidents: {str(e)}"
+
+
+def handle_ticket_upload(df, username, filename, tickets_mod):
+    """Create tickets from uploaded CSV."""
+    try:
+        created_count = 0
+        errors = []
+        
+        for idx, row in df.iterrows():
+            try:
+                ticket_id = f"CSV-{int(time.time())}-{idx}"
+                priority = row.get('priority', 'Medium') or 'Medium'
+                status = row.get('status', 'Open') or 'Open'
+                category = row.get('category', 'General') or 'General'
+                subject = row.get('title', f'Ticket from {filename}') or f'Ticket from {filename}'
+                description = row.get('description', '') or ''
+                created_at = row.get('created_at', date.today().isoformat()) or date.today().isoformat()
+                resolved_date = row.get('resolved_date', None)
+                assigned_to = row.get('assigned_to', None)
+
+                new_db_id = tickets_mod.create_ticket(
+                    ticket_id=ticket_id,
+                    priority=priority,
+                    status=status,
+                    category=category,
+                    subject=subject,
+                    description=description,
+                    created_at=created_at,
+                    resolved_date=resolved_date,
+                    assigned_to=assigned_to
+                )
+                if new_db_id == -1:
+                    errors.append(f"Row {idx}: DB error")
+                else:
+                    created_count += 1
+            except Exception as e:
+                errors.append(f"Row {idx}: {str(e)}")
+
+        message = f"Created {created_count} tickets from CSV"
+        if errors:
+            message += f". Errors: {', '.join(errors[:5])}"
+        return True, message
+    except Exception as e:
+        return False, f"Error processing tickets: {str(e)}"
+    
 # THIS IS LEFTOVER TEST CODE; IGNORE
 # if __name__ == "__main__":
 #     # initialize schema if available
