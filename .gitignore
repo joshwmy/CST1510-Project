@@ -1,1 +1,53 @@
+# .gitignore
+
+# Secrets and sensitive data
 .streamlit/secrets.toml
+*.toml
+!.streamlit/config.toml
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+DATA/*.db
+
+# User data
+DATA/users.txt
+DATA/intelligence_platform.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+backups/
+*.bak
+
+# Environment variables
+.env
+.env.local
