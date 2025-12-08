@@ -433,9 +433,9 @@ This is a student project for CST1510. For improvements:
 
 ## 🎓 Academic Information
 
-**Course:** CST1510 - Secure Software Development  
-**Institution:** [Your University]  
-**Semester:** [Semester/Year]  
+**Course:** CST1510 - Programming for Data Communication and Networks  
+**Institution:** Middlesex University Mauritius
+**Semester:** Year 1, Semester 1 
 **Student:** Joshua Wang (M01083838)
 
 ---
@@ -451,7 +451,6 @@ This project is for educational purposes as part of CST1510 coursework.
 For issues or questions:
 - Check the troubleshooting section above
 - Review code comments and docstrings
-- Contact course instructor
 
 ---
 
@@ -466,7 +465,7 @@ For issues or questions:
 
 ## 📅 Version History
 
-- **v1.0** (2024-12) - Initial release
+- **v1.0** (2025-12) - Initial release
   - Multi-domain architecture
   - Authentication & RBAC
   - AI-powered insights
@@ -475,4 +474,4 @@ For issues or questions:
 
 ---
 
-**Last Updated:** December 2024
+**Last Updated:** December 2025
