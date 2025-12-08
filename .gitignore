@@ -11,9 +11,6 @@
 *.sqlite3
 DATA/*.db
 
-# User data
-DATA/users.txt
-DATA/intelligence_platform.db
 
 # Python
 __pycache__/
