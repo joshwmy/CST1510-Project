@@ -37,7 +37,6 @@ def insert_user(username: str, password_hash: str, role: str = "user") -> bool:
     finally:
         conn.close()        # always close connection
 
-
 # ---------------------- READ ----------------------
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
@@ -57,7 +56,6 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
-
 def get_all_users() -> list:
     """
     Get all users from the database.
@@ -73,7 +71,6 @@ def get_all_users() -> list:
         return []
     finally:
         conn.close()
-
 
 # ---------------------- UPDATE ----------------------
 
@@ -135,7 +132,6 @@ def update_user(
         return False
     finally:
         conn.close()
-
 
 # ---------------------- DELETE ----------------------
 

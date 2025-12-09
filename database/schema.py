@@ -2,6 +2,7 @@
 from typing import Optional
 from database.db import connect_database
 
+# Tables are defined in raw SQL below. Keeping them in one place makes the schema easy to track.
 CREATE_USERS = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14,6 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
 );
 """
 
+# Basic structure for cybersecurity incident logs.
+# Keeping fields generic so future analytics features do not need a schema change.
 CREATE_CYBER_INCIDENTS = """
 CREATE TABLE IF NOT EXISTS cyber_incidents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +30,7 @@ CREATE TABLE IF NOT EXISTS cyber_incidents (
 );
 """
 
+# Metadata for any dataset someone uploads. 
 CREATE_DATASETS_METADATA = """
 CREATE TABLE IF NOT EXISTS datasets_metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +44,7 @@ CREATE TABLE IF NOT EXISTS datasets_metadata (
 );
 """
 
+# IT ticket table. 
 CREATE_IT_TICKETS = """
 CREATE TABLE IF NOT EXISTS it_tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +59,8 @@ CREATE TABLE IF NOT EXISTS it_tickets (
 );
 """
 
+# Sessions table keeps track of who is logged in using tokens.
+# Token expiry is handled by the service layer.
 CREATE_SESSIONS = """
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,10 +75,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 def create_all_tables(conn) -> None:
     """
     Creates all database tables inside the given connection.
+
+    Keeping this in one function avoids having to worry about the order.
+    Foreign keys are enabled before this runs, so the DB is consistent from the start.
     """
     conn.execute("PRAGMA foreign_keys = ON")
     cur = conn.cursor()
     
+    # Run the SQL definitions above. If the tables already exist, SQLite just ignores the creation.
     cur.execute(CREATE_USERS)
     cur.execute(CREATE_CYBER_INCIDENTS)
     cur.execute(CREATE_DATASETS_METADATA)
@@ -80,7 +91,9 @@ def create_all_tables(conn) -> None:
 
 def init_schema(db_path: Optional[str] = None) -> None:
     """
-    helper function: open DB, create tables, commit and close.
+    This function simplifies schema creation:
+    open DB, create tables, commit, close.
+    Good to run when setting up the app for the first time.
     """
     conn = connect_database(db_path)
 
@@ -90,6 +103,7 @@ def init_schema(db_path: Optional[str] = None) -> None:
         print("Database tables created successfully")
     
     except Exception as e:
+        # If something goes wrong, roll back so the DB does not end up half-created.
         conn.rollback()
         print(f"Error creating tables: {e}")
         raise
@@ -97,5 +111,6 @@ def init_schema(db_path: Optional[str] = None) -> None:
         conn.close()
 
 if __name__ == "__main__":
+    # Running schema.py directly will set up the database.
     init_schema()
     print("Schema initialization complete")
