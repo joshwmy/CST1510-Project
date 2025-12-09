@@ -111,6 +111,7 @@ def get_session(token: str) -> Optional[dict]:
     - This keeps the session table compact and prevents reuse of expired tokens.
     """
     conn = connect_database()
+    conn.row_factory = sqlite3.Row  # FIXED: Ensure rows are returned as Row objects
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM sessions WHERE token = ?", (token,))
@@ -118,8 +119,10 @@ def get_session(token: str) -> Optional[dict]:
         if not row:
             return None
 
-        # Support both named-row and index access for safety
-        expires_at = row["expires_at"] if "expires_at" in row.keys() else row[4]
+        # Convert Row object to dict
+        row_dict = dict(row)
+        expires_at = row_dict.get("expires_at")
+        
         if expires_at:
             exp_time = datetime.fromisoformat(expires_at)
             if exp_time < datetime.now():
@@ -129,7 +132,7 @@ def get_session(token: str) -> Optional[dict]:
                 return None
 
         # Return a dict for easier use by callers
-        return dict(row)
+        return row_dict
     finally:
         conn.close()
 
@@ -162,7 +165,11 @@ def session_user_role(token: str) -> str | None:
     user = get_user_by_username(username)
     if not user:
         return None
-    return user.get("role") or None
+    # FIXED: Handle both dict and tuple returns
+    if isinstance(user, dict):
+        return user.get("role")
+    else:
+        return user[3] if len(user) > 3 else None
 
 
 def require_role(token: str, allowed_roles: list[str]) -> bool:
@@ -185,8 +192,12 @@ def is_account_locked(username: str) -> bool:
     if not user:
         return False
 
-    # Handle both dict-like rows and tuple rows for compatibility with different model implementations
-    locked_until = user.get("locked_until") if isinstance(user, dict) else user[5]
+    # FIXED: Handle both dict-like rows and tuple rows
+    if isinstance(user, dict):
+        locked_until = user.get("locked_until")
+    else:
+        # For tuple: (id, username, password_hash, role, failed_attempts, locked_until)
+        locked_until = user[5] if len(user) > 5 else None
     
     if not locked_until:
         return False
@@ -212,7 +223,12 @@ def record_failed_attempt(username: str) -> None:
     if not user:
         return
 
-    failed = user.get("failed_attempts") if isinstance(user, dict) else user[4]
+    # FIXED: Handle both dict and tuple
+    if isinstance(user, dict):
+        failed = user.get("failed_attempts", 0)
+    else:
+        failed = user[4] if len(user) > 4 else 0
+    
     new_attempts = (failed or 0) + 1
 
     if new_attempts >= LOCK_THRESHOLD:
@@ -230,18 +246,7 @@ def clear_lock(username: str) -> None:
 
 # --------------
 # Login
-# ------------------
-def user_exists(username):
-    """
-    Convenience wrapper to check user existence. Used in UIs or validation logic.
-    """
-    try:
-        return get_user_by_username(username) is not None
-    except sqlite3.Error as e:
-        print(f"Database error checking user: {e}")
-        return False
-
-
+# ---------------
 def login_user(username, password):
     '''
     Authenticate a user and return a simple status tuple:
@@ -261,8 +266,18 @@ def login_user(username, password):
         if not user:
             return "user_not_found", None, None
         
-        # Check lock before attempting verification to avoid revealing timing differences
-        locked_until = user.get("locked_until") if isinstance(user, dict) else user[5]
+        # FIXED: Handle both dict and tuple returns for locked_until check
+        if isinstance(user, dict):
+            locked_until = user.get("locked_until")
+            stored_hash = user.get("password_hash")
+            stored_role = user.get("role")
+        else:
+            # For tuple: (id, username, password_hash, role, failed_attempts, locked_until)
+            locked_until = user[5] if len(user) > 5 else None
+            stored_hash = user[2] if len(user) > 2 else None
+            stored_role = user[3] if len(user) > 3 else None
+        
+        # Check lock before attempting verification
         if locked_until:
             lock_time = datetime.fromisoformat(locked_until)
             if datetime.now() < lock_time:
@@ -271,10 +286,13 @@ def login_user(username, password):
                 # expired lock = clear and reload user state
                 clear_lock(username)
                 user = get_user_by_username(username)
-
-        # Extract hash and role in a way that works for both dict and tuple row types
-        stored_hash = user.get("password_hash") if isinstance(user, dict) else user[2]
-        stored_role = user.get("role") if isinstance(user, dict) else user[3]
+                # Re-extract after reload
+                if isinstance(user, dict):
+                    stored_hash = user.get("password_hash")
+                    stored_role = user.get("role")
+                else:
+                    stored_hash = user[2] if len(user) > 2 else None
+                    stored_role = user[3] if len(user) > 3 else None
         
         if verify_password(password, stored_hash):
             # Successful login: reset lock counters and create a session token
@@ -287,7 +305,7 @@ def login_user(username, password):
             return "wrong_password", None, None
             
     except sqlite3.Error as e:
-        # In case of DB errors, do not leak details to caller; return user_not_found to keep UX simple.
+        # In case of DB errors, do not leak details to caller
         print(f"Database error during login: {e}")
         return "user_not_found", None, None
 
