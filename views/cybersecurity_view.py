@@ -20,12 +20,12 @@ def cybersecurity_view(
     
     st.subheader("Cybersecurity – Incidents")
 
-    # Check if required modules are available
+    # check if required modules are available
     if incidents_mod is None:
         st.error("Incidents module not available")
         return
     
-    # Create default helpers if not provided
+    # create default helpers if not provided
     if safe_df is None:
         def safe_df(obj):
             try:
@@ -41,7 +41,7 @@ def cybersecurity_view(
             for col, value, label in zip(cols, values, labels):
                 col.metric(label, value)
     
-    # CSV Upload Section
+    # CSV upload section
     with st.expander("📤 Upload CSV of Incidents", expanded=False):
         st.markdown("""
         **Expected CSV columns:** 
@@ -61,7 +61,7 @@ def cybersecurity_view(
 
             if st.button("Upload Incidents", key="upload_incident_btn"):
                 with st.spinner("Processing incidents..."):
-                    # Import here to avoid circular dependency
+                    # import here to avoid circular dependency
                     from models.csv_loader import handle_csv_upload
                     success, message = handle_csv_upload(
                         uploaded_file, 
@@ -74,14 +74,16 @@ def cybersecurity_view(
                     else:
                         st.error(message)
 
-    # Add incident form
+    # add incident form
     default_reporter = st.session_state.username or ""
     if add_incident_form_func:
         add_incident_form_func(default_reported_by=default_reporter, incidents_mod=incidents_mod)
 
-    # Fetch analytics from backend
+    # fetch analytics using OOP model
     try:
-        analytics = incidents_mod.get_all_incident_analytics()
+        # create model instance and get analytics using new OOP style
+        incident_model = incidents_mod.IncidentModel()
+        analytics = incident_model.get_analytics()
     except Exception as e:
         st.error(f"Error getting analytics: {e}")
         analytics = {}
@@ -94,7 +96,7 @@ def cybersecurity_view(
     # KPIs
     small_stat_col_layout([total_inc, open_inc], ["Total incidents", "Open incidents"])
 
-    # Bar chart: incidents by severity
+    # bar chart: incidents by severity
     st.markdown("### Incidents by severity (bar chart)")
     if by_sev:
         sev_df = pd.DataFrame({"severity": list(by_sev.keys()), "count": list(by_sev.values())})
@@ -105,7 +107,7 @@ def cybersecurity_view(
     else:
         st.info("No severity data available.")
 
-    # PIE CHART: incidents by severity
+    # pie chart: incidents by severity
     st.markdown("### Incidents by severity (pie chart)")
     if by_sev:
         pie_df = pd.DataFrame({"severity": list(by_sev.keys()), "count": list(by_sev.values())})
@@ -115,7 +117,7 @@ def cybersecurity_view(
     else:
         st.info("No severity data available.")
 
-    # Bar chart: incidents by status
+    # bar chart: incidents by status
     st.markdown("### Incidents by status (bar chart)")
     if by_status:
         status_df = pd.DataFrame({"status": list(by_status.keys()), "count": list(by_status.values())})
@@ -126,17 +128,16 @@ def cybersecurity_view(
     else:
         st.info("No status data available.")
 
-    # Filters and incident table
+    # filters and incident table
     st.markdown("### Filter incidents")
     fcol1, fcol2, fcol3 = st.columns(3)
-    sev = fcol1.selectbox("Severity", options=[""] + (incidents_mod.VALID_SEVERITIES 
-                        if hasattr(incidents_mod, "VALID_SEVERITIES") else []))
-    stat = fcol2.selectbox("Status", options=[""] + (incidents_mod.VALID_STATUSES 
-                        if hasattr(incidents_mod, "VALID_STATUSES") else []))
+    sev = fcol1.selectbox("Severity", options=[""] + incident_model.VALID_SEVERITIES)
+    stat = fcol2.selectbox("Status", options=[""] + incident_model.VALID_STATUSES)
     inc_type = fcol3.text_input("Incident type (exact match)")
 
     try:
-        df_inc = incidents_mod.get_incidents_by_filters(
+        # use OOP model to filter incidents
+        df_inc = incident_model.filter_by(
             severity=(sev or None),
             status=(stat or None),
             category=(inc_type or None),
@@ -150,18 +151,19 @@ def cybersecurity_view(
     if not df_inc.empty:
         st.dataframe(df_inc)
         
-        # Delete functionality (only for admins and cybersecurity_admins)
+        # delete functionality (only for admins and cybersecurity_admins)
         user_role = st.session_state.get("user_role", "user")
         if user_role in ["admin", "cybersecurity_admin"]:
             st.markdown("---")
-            st.subheader(" Delete Incident")
+            st.subheader("🗑️ Delete Incident")
             incident_ids = df_inc['id'].tolist()
             selected_id = st.selectbox("Select incident to delete", incident_ids, 
                                       format_func=lambda x: f"ID {x}: {df_inc[df_inc['id']==x]['category'].values[0]}")
             
-            if st.button(" Delete Selected Incident", type="secondary"):
+            if st.button("🗑️ Delete Selected Incident", type="secondary"):
                 try:
-                    if incidents_mod.delete_incident(selected_id):
+                    # use OOP model to delete
+                    if incident_model.delete(selected_id):
                         st.success(f"Deleted incident {selected_id}")
                         st.rerun()
                     else:
@@ -171,16 +173,16 @@ def cybersecurity_view(
     else:
         st.info("No incidents match the filters.")
 
-    # AI Insights (Incidents) - FIXED SECTION
+    # AI insights section
     if not df_inc.empty and ai_insights_for:
         st.markdown("---")
         st.markdown("### 🤖 AI Analysis")
         
-        # Create incident labels for dropdown
+        # create incident labels for dropdown
         labels = [f"{int(r['id'])}: {r.get('category','')[:30]} - {r.get('severity','')}" 
                  for _, r in df_inc.iterrows()]
         
-        # Selectbox to choose incident
+        # selectbox to choose incident
         sel_idx = st.selectbox(
             "Choose incident for AI analysis", 
             options=list(range(len(labels))), 
@@ -188,14 +190,14 @@ def cybersecurity_view(
             key="ai_incident_select"
         )
         
-        # Get the selected incident as a dictionary
+        # get the selected incident as a dictionary
         selected_incident = df_inc.iloc[sel_idx].to_dict()
         
-        # Display incident details
+        # display incident details
         with st.expander("📋 Selected Incident Details", expanded=False):
             st.write(selected_incident)
         
-        # Button to generate AI insights
+        # button to generate AI insights
         if st.button("🧠 Generate AI Insights", key=f"ai_incident_btn_{sel_idx}"):
             with st.spinner("🔍 Analyzing incident with AI..."):
                 insights = ai_insights_for(selected_incident, domain="Cybersecurity")

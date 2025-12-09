@@ -1,235 +1,251 @@
 """
-AI Services for generating insights using Google Gemini API
-FIXED: Handles missing fields and matches actual database schema
+AI Services (OOP Refactored)
+Provides AI-powered insights using Google Gemini API with domain-specific assistants
 """
-import google.generativeai as genai
+
 import os
 from typing import Dict, Any, Optional
+from abc import ABC, abstractmethod
+import streamlit as st
 
-def ai_insights_for(selected_incident: Dict[str, Any], domain: str = "Cybersecurity", **kwargs) -> Optional[str]:
+
+class AIAssistant(ABC):      # base class for all AI assistants; each domain gets its own assistant
     """
-    Generate AI insights for an incident/ticket using Google Gemini API.
-    
-    Args:
-        selected_incident: Dictionary containing incident/ticket data
-        domain: The domain context (e.g., "Cybersecurity", "IT Tickets")
-        **kwargs: Additional arguments (like button_key) that are ignored
-    
-    Returns:
-        AI-generated insights as a string, or None if error occurs
+    Base class for AI-powered domain assistants.
+    Each domain has a specialized assistant with custom prompts.
     """
-    try:
-        # Get API key from environment
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    
+    def __init__(self, domain_name: str):
+        # initialize with domain name; used for logging and identification
+        self.domain_name = domain_name
+        self.model = None           # gemini model; created lazily when first used
+        self._api_key = None        # api key cached after first retrieval
+    
+    @property
+    def api_key(self) -> Optional[str]:
+        """Get API key from multiple possible sources"""
+        if self._api_key:
+            return self._api_key        # return cached key if we already have it
+        
+        key = None      # will store the found api key
+        
+        # try to get from streamlit secrets first (for cloud deployment)
+        try:
+            key = st.secrets.get("GEMINI_API_KEY")
+        except:
+            pass        # secrets not available; not a problem for local dev
+        
+        # if not in secrets, try environment variables
+        if not key:
+            key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        
+        self._api_key = key     # cache it for next time
+        return key
+    
+    def initialize_model(self):
+        """Initialize Gemini model; only runs once when first needed"""
+        if self.model is not None:
+            return      # already initialized; no need to do it again
+        
+        api_key = self.api_key
         if not api_key:
-            return "⚠️ GEMINI_API_KEY not found in environment variables. Please set it to use AI insights."
+            raise ValueError(
+                "⚠️ GEMINI_API_KEY not found. "
+                "Set it in .env or .streamlit/secrets.toml"
+            )
         
-        # Configure Gemini
-        genai.configure(api_key=api_key)
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)        # configure with our api key
+            self.model = genai.GenerativeModel('gemini-2.0-flash-exp')      # use the latest flash model
+        except ImportError:
+            raise ImportError(
+                "google-generativeai not installed. "
+                "Run: pip install google-generativeai"
+            )
+        except Exception as e:
+            raise Exception(f"Failed to initialize Gemini model: {e}")
+    
+    @abstractmethod
+    def build_prompt(self, record: Dict[str, Any]) -> str:
+        """
+        Build domain-specific prompt for AI analysis.
+        Each child class implements its own prompt logic.
+        """
+        pass        # child classes must implement this
+    
+    def analyze(self, record: Dict[str, Any]) -> Optional[str]:
+        """
+        Analyze a record and return AI insights.
+        This is the main method that gets called from the UI.
+        """
+        if not record:
+            return "⚠️ No data provided for analysis"
         
-        # Initialize the model
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        
-        # Build the prompt based on domain and available fields
-        if domain == "Cybersecurity":
-            prompt = build_cybersecurity_prompt(selected_incident)
-        elif domain == "IT Tickets":
-            prompt = build_it_ticket_prompt(selected_incident)
-        elif domain == "Datasets":
-            prompt = build_dataset_prompt(selected_incident)
-        else:
-            prompt = build_generic_prompt(selected_incident, domain)
-        
-        # Generate content using Gemini
-        response = model.generate_content(prompt)
-        
-        # Extract the response text
-        if response and response.text:
-            return response.text
-        else:
-            return "No insights generated."
+        try:
+            # make sure model is initialized
+            self.initialize_model()
             
-    except Exception as e:
-        return f"❌ Error generating AI insights: {str(e)}"
+            # build domain-specific prompt
+            prompt = self.build_prompt(record)
+            
+            # generate insights using gemini
+            response = self.model.generate_content(prompt)
+            return response.text if response else "❌ No response from AI"
+        
+        except ValueError as e:
+            return str(e)       # api key error or configuration issue
+        except ImportError as e:
+            return str(e)       # missing library
+        except Exception as e:
+            return f"❌ Error generating insights: {str(e)}"
+    
+    def __str__(self):
+        """String representation for user-friendly output"""
+        return f"{self.__class__.__name__} for {self.domain_name}"
+    
+    def __repr__(self):
+        """String representation for debugging"""
+        return f"<{self.__class__.__name__}: {self.domain_name}>"
 
 
-def build_cybersecurity_prompt(record: Dict[str, Any]) -> str:
-    """
-    Build a prompt for cybersecurity incident analysis.
-    Matches cyber_incidents table schema:
-    - id, incident_id, timestamp, severity, category, status, description, created_at
-    """
+class CybersecurityAssistant(AIAssistant):      # ai assistant specialized for cybersecurity incidents
+    """AI assistant for analyzing cybersecurity incidents"""
     
-    # Extract fields safely with defaults - matching actual schema
-    db_id = record.get("id", "N/A")
-    incident_id = record.get("incident_id", "N/A")
-    timestamp = record.get("timestamp", "Unknown")
-    severity = record.get("severity", "Unknown")
-    category = record.get("category", "Unknown")
-    status = record.get("status", "Unknown")
-    description = record.get("description", "No description available")
-    created_at = record.get("created_at", "Unknown")
+    def __init__(self):
+        # initialize with cybersecurity domain
+        super().__init__(domain_name="Cybersecurity")
     
-    prompt = f"""You are a cybersecurity analyst assistant. Analyze the following security incident and provide actionable insights.
+    def build_prompt(self, incident: Dict[str, Any]) -> str:
+        """Build prompt for cybersecurity incident analysis"""
+        # extract incident details with defaults if missing
+        category = incident.get('category', 'Unknown')
+        severity = incident.get('severity', 'Unknown')
+        status = incident.get('status', 'Unknown')
+        description = incident.get('description', 'No description provided')
+        
+        # build comprehensive prompt for incident analysis
+        prompt = f"""You are a cybersecurity analyst. Analyze this security incident:
 
 **Incident Details:**
-- Incident ID: {incident_id}
-- Timestamp: {timestamp}
+- Type: {category}
 - Severity: {severity}
-- Category: {category}
 - Status: {status}
-- Database ID: {db_id}
-- Recorded At: {created_at}
+- Description: {description}
 
-**Description:**
-{description}
+**Provide:**
+1. **Immediate Impact**: What risks does this pose?
+2. **Recommended Actions**: What should be done right now?
+3. **Root Cause Analysis**: What likely caused this?
+4. **Prevention**: How to prevent similar incidents?
 
-Please provide:
-1. A brief analysis of the incident based on its category and severity
-2. Potential root causes for this type of incident
-3. Recommended immediate actions to address this {severity} severity issue
-4. Prevention strategies to avoid similar {category} incidents in the future
-5. Any relevant security best practices for this incident category
+Keep your analysis practical and actionable. Even if there is a lack of information, just assume in a generalized setting"""
+        
+        return prompt
 
-Keep your response concise, actionable, and focused on the specific incident details provided."""
+
+class ITTicketAssistant(AIAssistant):      # ai assistant specialized for IT support tickets
+    """AI assistant for troubleshooting IT tickets"""
     
-    return prompt
-
-
-def build_it_ticket_prompt(record: Dict[str, Any]) -> str:
-    """
-    Build a prompt for IT ticket analysis.
-    Matches it_tickets table schema:
-    - id, ticket_id, priority, description, status, assigned_to, created_at, resolution_time_hours, created_at_db
-    """
+    def __init__(self):
+        # initialize with IT tickets domain
+        super().__init__(domain_name="IT Tickets")
     
-    # Extract fields safely with defaults - matching actual schema
-    db_id = record.get("id", "N/A")
-    ticket_id = record.get("ticket_id", "N/A")
-    priority = record.get("priority", "Unknown")
-    description = record.get("description", "No description available")
-    status = record.get("status", "Unknown")
-    assigned_to = record.get("assigned_to", "Unassigned")
-    created_at = record.get("created_at", "Unknown")
-    resolution_time_hours = record.get("resolution_time_hours", "Not yet resolved")
-    created_at_db = record.get("created_at_db", "Unknown")
-    
-    # Format resolution time nicely
-    resolution_display = resolution_time_hours
-    if resolution_time_hours and resolution_time_hours != "Not yet resolved":
-        try:
-            hours = int(resolution_time_hours)
-            if hours < 24:
-                resolution_display = f"{hours} hours"
-            else:
-                days = hours // 24
-                remaining_hours = hours % 24
-                resolution_display = f"{days} days, {remaining_hours} hours"
-        except (ValueError, TypeError):
-            resolution_display = str(resolution_time_hours)
-    
-    prompt = f"""You are an IT support assistant. Analyze the following support ticket and provide helpful guidance.
+    def build_prompt(self, ticket: Dict[str, Any]) -> str:
+        """Build prompt for IT ticket troubleshooting"""
+        # extract ticket details
+        title = ticket.get('title', 'Unknown')
+        priority = ticket.get('priority', 'Unknown')
+        status = ticket.get('status', 'Unknown')
+        description = ticket.get('description', 'No description provided')
+        
+        # build troubleshooting prompt
+        prompt = f"""You are an IT support specialist. Help with this ticket:
 
 **Ticket Details:**
-- Ticket ID: {ticket_id}
+- Title: {title}
 - Priority: {priority}
 - Status: {status}
-- Assigned To: {assigned_to}
-- Created: {created_at}
-- Resolution Time: {resolution_display}
-- Database ID: {db_id}
+- Description: {description}
 
-**Description:**
-{description}
+**Provide:**
+1. **Diagnosis**: What's likely causing this issue?
+2. **Quick Fixes**: Simple solutions to try first
+3. **Detailed Solution**: Step-by-step resolution
+4. **Prevention**: How to avoid this in future
 
-Please provide:
-1. Analysis of the issue based on the ticket description
-2. Likely causes for this type of problem
-3. Step-by-step troubleshooting recommendations
-4. Estimated resolution time if not yet resolved (considering the {priority} priority)
-5. Prevention tips to avoid similar issues in the future
+Be clear and provide step-by-step instructions. Even if there is a lack of information, just assume in a generalized setting"""
+        
+        return prompt
 
-Keep your response practical, user-friendly, and tailored to the {priority} priority level."""
+
+class DatasetAssistant(AIAssistant):      # ai assistant specialized for dataset analysis
+    """AI assistant for analyzing datasets"""
     
-    return prompt
-
-
-def build_generic_prompt(record: Dict[str, Any], domain: str) -> str:
-    """Build a generic prompt for any domain."""
+    def __init__(self):
+        # initialize with datasets domain
+        super().__init__(domain_name="Datasets")
     
-    # Convert record to readable format
-    record_text = "\n".join([f"- {key}: {value}" for key, value in record.items() if value is not None])
-    
-    prompt = f"""You are an expert analyst for {domain}. Analyze the following record and provide insights.
+    def build_prompt(self, dataset: Dict[str, Any]) -> str:
+        """Build prompt for dataset analysis"""
+        # extract dataset metadata
+        name = dataset.get('name', 'Unknown')
+        rows = dataset.get('rows', 0)
+        columns = dataset.get('columns', 0)
+        uploaded_by = dataset.get('uploaded_by', 'Unknown')
+        
+        # build analysis prompt
+        prompt = f"""You are a data scientist. Analyze this dataset:
 
-**Record Details:**
-{record_text}
-
-Please provide:
-1. Key observations about this record
-2. Analysis of the situation
-3. Recommended actions based on the data
-4. Best practices and prevention strategies
-
-Keep your response clear, actionable, and relevant to the {domain} context."""
-    
-    return prompt
-
-
-def build_dataset_prompt(record: Dict[str, Any]) -> str:
-    """
-    Build a prompt for dataset analysis.
-    Matches datasets_metadata table schema:
-    - id, dataset_id, name, rows, columns, uploaded_by, upload_date, created_at
-    """
-    
-    # Extract fields safely with defaults - matching actual schema
-    db_id = record.get("id", "N/A")
-    dataset_id = record.get("dataset_id", "N/A")
-    name = record.get("name", "Unnamed dataset")
-    rows = record.get("rows", "Unknown")
-    columns = record.get("columns", "Unknown")
-    uploaded_by = record.get("uploaded_by", "Unknown")
-    upload_date = record.get("upload_date", "Unknown")
-    created_at = record.get("created_at", "Unknown")
-    
-    prompt = f"""You are a data analyst assistant. Analyze the following dataset metadata and provide insights.
-
-**Dataset Details:**
-- Dataset ID: {dataset_id}
+**Dataset Information:**
 - Name: {name}
-- Dimensions: {rows} rows × {columns} columns
-- Uploaded By: {uploaded_by}
-- Upload Date: {upload_date}
-- Database ID: {db_id}
-- Recorded At: {created_at}
+- Size: {rows} rows × {columns} columns
+- Uploaded by: {uploaded_by}
 
-Please provide:
-1. Analysis of the dataset size and structure
-2. Potential use cases for this dataset based on its dimensions
-3. Data quality considerations (what to check given the size)
-4. Recommendations for data processing or analysis
-5. Best practices for managing and utilizing this dataset
+**Provide:**
+1. **Dataset Overview**: What kind of data is this likely to contain?
+2. **Potential Insights**: What analyses would be valuable?
+3. **Data Quality**: What to check for data quality?
+4. **Visualization Ideas**: What charts/graphs would help?
+5. **Business Value**: How can this data be used?
 
-Keep your response practical and focused on actionable insights for working with this dataset."""
-    
-    return prompt
+Focus on practical insights and actionable recommendations. Even if there is a lack of information, just assume in a generalized setting"""
+        
+        return prompt
 
 
-def get_field_safe(record: Dict[str, Any], *field_names: str, default: str = "N/A") -> str:
+# ==================== FACTORY FUNCTION ====================
+
+def get_assistant_for_domain(domain: str) -> Optional[AIAssistant]:
     """
-    Safely get a field value from a record, trying multiple possible field names.
-    
-    Args:
-        record: Dictionary containing the data
-        *field_names: One or more field names to try (in order)
-        default: Default value if none of the fields exist
-    
-    Returns:
-        The first found value, or the default
+    Factory function to get the right AI assistant for a domain.
+    Makes it easy to get the correct assistant without knowing class names.
     """
-    for field_name in field_names:
-        value = record.get(field_name)
-        if value is not None:
-            return str(value)
-    return default
+    # map domain names to assistant classes
+    assistants = {
+        "Cybersecurity": CybersecurityAssistant,
+        "IT Tickets": ITTicketAssistant,
+        "Datasets": DatasetAssistant
+    }
+    
+    # get the assistant class and create instance
+    assistant_class = assistants.get(domain)
+    if assistant_class:
+        return assistant_class()
+    
+    # domain not found
+    print(f"Warning: No AI assistant found for domain '{domain}'")
+    return None
+
+
+# ==================== BACKWARD COMPATIBILITY ====================
+
+def ai_insights_for(record: Dict[str, Any], domain: str) -> Optional[str]:
+    """
+    Legacy function for backward compatibility with old code.
+    New code should use the assistant classes directly.
+    """
+    assistant = get_assistant_for_domain(domain)
+    if assistant:
+        return assistant.analyze(record)
+    return f"⚠️ No AI assistant available for domain: {domain}"

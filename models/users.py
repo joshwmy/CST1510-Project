@@ -1,6 +1,8 @@
 """
-Fixed users.py module - ensures locked_until can be set to NULL
+User Management Module
+Handles CRUD operations for user accounts with authentication support
 """
+
 import sqlite3
 from typing import Optional, Dict, Any
 from database.db import connect_database
@@ -10,14 +12,7 @@ from database.db import connect_database
 def insert_user(username: str, password_hash: str, role: str = "user") -> bool:
     """
     Insert a new user into the database.
-    
-    Args:
-        username: The username
-        password_hash: The hashed password
-        role: User role (default: "user")
-    
-    Returns:
-        bool: True if successful, False otherwise
+    Password should already be hashed before calling this function.
     """
     conn = connect_database()
     try:
@@ -32,7 +27,7 @@ def insert_user(username: str, password_hash: str, role: str = "user") -> bool:
         conn.commit()
         return True
     except sqlite3.IntegrityError:
-        # Username already exists
+        # username already exists; sqlite will reject duplicate usernames
         conn.rollback()
         return False
     except sqlite3.Error as e:
@@ -40,7 +35,7 @@ def insert_user(username: str, password_hash: str, role: str = "user") -> bool:
         conn.rollback()
         return False
     finally:
-        conn.close()
+        conn.close()        # always close connection
 
 
 # ---------------------- READ ----------------------
@@ -48,19 +43,14 @@ def insert_user(username: str, password_hash: str, role: str = "user") -> bool:
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     """
     Retrieve a user by username.
-    
-    Args:
-        username: The username to search for
-    
-    Returns:
-        Dict with user data or None if not found
+    Returns user data as dict or None if not found.
     """
     conn = connect_database()
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE username = ?", (username,))
         row = cur.fetchone()
-        return dict(row) if row else None
+        return dict(row) if row else None       # convert to dict or return None if not found
     except sqlite3.Error as e:
         print(f"Error fetching user {username}: {e}")
         return None
@@ -71,14 +61,12 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 def get_all_users() -> list:
     """
     Get all users from the database.
-    
-    Returns:
-        List of user dictionaries
+    Returns list of user dictionaries sorted by creation date.
     """
     conn = connect_database()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+        cur.execute("SELECT * FROM users ORDER BY created_at DESC")       # most recent query is shown
         return [dict(row) for row in cur.fetchall()]
     except sqlite3.Error as e:
         print(f"Error fetching all users: {e}")
@@ -98,23 +86,13 @@ def update_user(
 ) -> bool:
     """
     Update user fields. Pass None to keep existing value.
-    To explicitly set locked_until to NULL, pass empty string "".
-    
-    Args:
-        username: The username to update
-        password_hash: New password hash (or None to keep)
-        role: New role (or None to keep)
-        failed_attempts: New failed attempts count (or None to keep)
-        locked_until: New lock timestamp (None to keep, "" to clear)
-    
-    Returns:
-        bool: True if successful, False otherwise
+    To explicitly set locked_until to NULL (unlock account), pass empty string "".
     """
     conn = connect_database()
     try:
         cur = conn.cursor()
         
-        # Build dynamic UPDATE query
+        # build dynamic UPDATE query based on what fields are provided
         updates = []
         params = []
         
@@ -130,27 +108,26 @@ def update_user(
             updates.append("failed_attempts = ?")
             params.append(failed_attempts)
         
-        # Special handling for locked_until to allow NULL
+        # special handling for locked_until to allow NULL (unlock account)
         if locked_until is not None:
             if locked_until == "":
-                # Empty string means clear the lock (set to NULL)
+                # empty string means clear the lock by setting to NULL
                 updates.append("locked_until = NULL")
             else:
                 updates.append("locked_until = ?")
                 params.append(locked_until)
         
         if not updates:
-            # Nothing to update
+            # nothing to update
             return False
         
-        # Add username to params
-        params.append(username)
+        params.append(username)     # add username for WHERE clause
         
         query = f"UPDATE users SET {', '.join(updates)} WHERE username = ?"
         cur.execute(query, params)
         conn.commit()
         
-        return cur.rowcount > 0
+        return cur.rowcount > 0     # returns true if something was actually updated
         
     except sqlite3.Error as e:
         print(f"Error updating user {username}: {e}")
@@ -165,19 +142,14 @@ def update_user(
 def delete_user(username: str) -> bool:
     """
     Delete a user from the database.
-    
-    Args:
-        username: The username to delete
-    
-    Returns:
-        bool: True if successful, False otherwise
+    This permanently removes the user account.
     """
     conn = connect_database()
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.commit()
-        return cur.rowcount > 0
+        return cur.rowcount > 0     # returns true if something was actually deleted
     except sqlite3.Error as e:
         print(f"Error deleting user {username}: {e}")
         conn.rollback()

@@ -20,12 +20,12 @@ def tickets_view(
     
     st.subheader("IT Tickets – Support Tracking")
 
-    # Check if required modules are available
+    # check if required modules are available
     if tickets_mod is None:
         st.error("Tickets module not available")
         return
     
-    # Create default helpers if not provided
+    # create default helpers if not provided
     if safe_df is None:
         def safe_df(obj):
             try:
@@ -41,7 +41,7 @@ def tickets_view(
             for col, value, label in zip(cols, values, labels):
                 col.metric(label, value)
     
-    # CSV Upload Section
+    # CSV upload section
     with st.expander("📤 Upload CSV of Tickets", expanded=False):
         st.markdown("""
         **Expected CSV columns:** 
@@ -61,7 +61,7 @@ def tickets_view(
 
             if st.button("Upload Tickets", key="upload_ticket_btn"):
                 with st.spinner("Processing tickets..."):
-                    # Import here to avoid circular dependency
+                    # import here to avoid circular dependency
                     from models.csv_loader import handle_csv_upload
                     success, message = handle_csv_upload(
                         uploaded_file, 
@@ -74,30 +74,34 @@ def tickets_view(
                     else:
                         st.error(message)
 
-    # Add ticket form
+    # add ticket form
     if add_ticket_form_func:
         add_ticket_form_func(tickets_mod=tickets_mod)
 
-    # Fetch analytics from backend
+    # fetch analytics using OOP model
     try:
-        analytics = tickets_mod.get_all_ticket_analytics()
+        # create model instance and get analytics using new OOP style
+        ticket_model = tickets_mod.TicketModel()
+        analytics = ticket_model.get_analytics()
+        resolution_stats = ticket_model.get_resolution_stats()
     except Exception as e:
         st.error(f"Error getting analytics: {e}")
         analytics = {}
+        resolution_stats = {}
 
     total_tickets = analytics.get("total_tickets", 0)
     open_tickets = analytics.get("open_tickets", 0)
     by_priority = analytics.get("by_priority", {})
     by_status = analytics.get("by_status", {})
-    avg_resolution = analytics.get("avg_resolution_time_hours", 0)
+    avg_resolution = resolution_stats.get("avg_resolution_days", 0)
 
     # KPIs
     small_stat_col_layout(
-        [total_tickets, open_tickets, f"{avg_resolution:.1f}h"], 
+        [total_tickets, open_tickets, f"{avg_resolution:.1f}d"], 
         ["Total Tickets", "Open Tickets", "Avg Resolution Time"]
     )
 
-    # Bar chart: tickets by priority
+    # bar chart: tickets by priority
     st.markdown("### Tickets by Priority (bar chart)")
     if by_priority:
         priority_df = pd.DataFrame({
@@ -116,7 +120,7 @@ def tickets_view(
     else:
         st.info("No priority data available.")
 
-    # Pie chart: tickets by priority
+    # pie chart: tickets by priority
     st.markdown("### Tickets by Priority (pie chart)")
     if by_priority:
         pie_df = pd.DataFrame({
@@ -134,7 +138,7 @@ def tickets_view(
     else:
         st.info("No priority data available.")
 
-    # Bar chart: tickets by status
+    # bar chart: tickets by status
     st.markdown("### Tickets by Status (bar chart)")
     if by_status:
         status_df = pd.DataFrame({
@@ -153,22 +157,21 @@ def tickets_view(
     else:
         st.info("No status data available.")
 
-    # Filters and ticket table
+    # filters and ticket table
     st.markdown("### Filter Tickets")
     fcol1, fcol2 = st.columns(2)
     priority_filter = fcol1.selectbox(
         "Priority", 
-        options=[""] + (tickets_mod.VALID_PRIORITIES 
-                       if hasattr(tickets_mod, "VALID_PRIORITIES") else [])
+        options=[""] + ticket_model.VALID_PRIORITIES
     )
     status_filter = fcol2.selectbox(
         "Status", 
-        options=[""] + (tickets_mod.VALID_STATUSES 
-                       if hasattr(tickets_mod, "VALID_STATUSES") else [])
+        options=[""] + ticket_model.VALID_STATUSES
     )
 
     try:
-        df_tickets = tickets_mod.get_tickets_by_filters(
+        # use OOP model to filter tickets
+        df_tickets = ticket_model.filter_by(
             priority=(priority_filter or None),
             status=(status_filter or None),
             as_dataframe=True
@@ -181,18 +184,19 @@ def tickets_view(
     if not df_tickets.empty:
         st.dataframe(df_tickets)
         
-        # Delete functionality (only for admins and it_admins)
+        # delete functionality (only for admins and it_admins)
         user_role = st.session_state.get("user_role", "user")
         if user_role in ["admin", "it_admin"]:
             st.markdown("---")
-            st.subheader(" Delete Ticket")
+            st.subheader("🗑️ Delete Ticket")
             ticket_ids = df_tickets['id'].tolist()
             selected_id = st.selectbox("Select ticket to delete", ticket_ids,
                                       format_func=lambda x: f"ID {x}: {df_tickets[df_tickets['id']==x]['ticket_id'].values[0]}")
             
-            if st.button(" Delete Selected Ticket", type="secondary"):
+            if st.button("🗑️ Delete Selected Ticket", type="secondary"):
                 try:
-                    if tickets_mod.delete_ticket(selected_id):
+                    # use OOP model to delete
+                    if ticket_model.delete(selected_id):
                         st.success(f"Deleted ticket {selected_id}")
                         st.rerun()
                     else:
@@ -202,18 +206,18 @@ def tickets_view(
     else:
         st.info("No tickets match the filters.")
 
-    # AI Insights (Tickets) - FIXED SECTION
+    # AI insights section
     if not df_tickets.empty and ai_insights_for:
         st.markdown("---")
         st.markdown("### 🤖 AI Analysis")
         
-        # Create ticket labels for dropdown
+        # create ticket labels for dropdown
         labels = [
             f"{r.get('ticket_id', 'N/A')}: {str(r.get('description', ''))[:40]}... - {r.get('priority', '')}" 
             for _, r in df_tickets.iterrows()
         ]
         
-        # Selectbox to choose ticket
+        # selectbox to choose ticket
         sel_idx = st.selectbox(
             "Choose ticket for AI analysis", 
             options=list(range(len(labels))), 
@@ -221,14 +225,14 @@ def tickets_view(
             key="ai_ticket_select"
         )
         
-        # Get the selected ticket as a dictionary
+        # get the selected ticket as a dictionary
         selected_ticket = df_tickets.iloc[sel_idx].to_dict()
         
-        # Display ticket details
+        # display ticket details
         with st.expander("📋 Selected Ticket Details", expanded=False):
             st.write(selected_ticket)
         
-        # Button to generate AI insights
+        # button to generate AI insights
         if st.button("🧠 Generate AI Insights", key=f"ai_ticket_btn_{sel_idx}"):
             with st.spinner("🔍 Analyzing ticket with AI..."):
                 insights = ai_insights_for(selected_ticket, domain="IT Tickets")

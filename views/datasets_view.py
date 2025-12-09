@@ -20,12 +20,12 @@ def datasets_view(
     
     st.subheader("Datasets – Data Management")
 
-    # Check if required modules are available
+    # check if required modules are available
     if datasets_mod is None:
         st.error("Datasets module not available")
         return
     
-    # Create default helpers if not provided
+    # create default helpers if not provided
     if safe_df is None:
         def safe_df(obj):
             try:
@@ -41,7 +41,7 @@ def datasets_view(
             for col, value, label in zip(cols, values, labels):
                 col.metric(label, value)
     
-    # CSV Upload Section
+    # CSV upload section
     with st.expander("📤 Upload Dataset (CSV)", expanded=False):
         st.markdown("""
         **Upload any CSV file as a dataset**
@@ -62,7 +62,7 @@ def datasets_view(
 
             if st.button("Upload Dataset", key="upload_dataset_btn"):
                 with st.spinner("Processing dataset..."):
-                    # Import here to avoid circular dependency
+                    # import here to avoid circular dependency
                     from models.csv_loader import handle_csv_upload
                     success, message = handle_csv_upload(
                         uploaded_file, 
@@ -75,13 +75,15 @@ def datasets_view(
                     else:
                         st.error(message)
 
-    # Add dataset form (if available)
+    # add dataset form (if available)
     if add_dataset_form_func:
         add_dataset_form_func(datasets_mod=datasets_mod)
 
-    # Fetch analytics from backend
+    # fetch analytics using OOP model
     try:
-        analytics = datasets_mod.get_all_analytics()
+        # create model instance and get analytics using new OOP style
+        dataset_model = datasets_mod.DatasetModel()
+        analytics = dataset_model.get_analytics()
     except Exception as e:
         st.error(f"Error getting analytics: {e}")
         analytics = {}
@@ -90,13 +92,13 @@ def datasets_view(
     total_rows = analytics.get("total_rows", 0)
     by_uploader = analytics.get("by_uploaded_by", {})
 
-    # KPIs - removed total_columns as it's not in the analytics
+    # KPIs
     small_stat_col_layout(
         [total_datasets, total_rows], 
         ["Total Datasets", "Total Rows"]
     )
 
-    # Bar chart: datasets by uploader
+    # bar chart: datasets by uploader
     st.markdown("### Datasets by Uploader")
     if by_uploader:
         uploader_df = pd.DataFrame({
@@ -115,7 +117,7 @@ def datasets_view(
     else:
         st.info("No uploader data available.")
 
-    # Pie chart: datasets by uploader
+    # pie chart: datasets by uploader
     st.markdown("### Dataset Distribution by Uploader")
     if by_uploader:
         pie_df = pd.DataFrame({
@@ -133,10 +135,11 @@ def datasets_view(
     else:
         st.info("No uploader data available.")
 
-    # All datasets table
+    # all datasets table
     st.markdown("### All Datasets")
     try:
-        df_datasets = datasets_mod.get_all_datasets(as_dataframe=True)
+        # use OOP model to get all datasets
+        df_datasets = dataset_model.get_all(as_dataframe=True)
     except Exception as e:
         st.error(f"Error fetching datasets: {e}")
         df_datasets = pd.DataFrame()
@@ -145,18 +148,19 @@ def datasets_view(
     if not df_datasets.empty:
         st.dataframe(df_datasets)
         
-        # Delete functionality (only for admins and datasets_admins)
+        # delete functionality (only for admins and datasets_admins)
         user_role = st.session_state.get("user_role", "user")
         if user_role in ["admin", "datasets_admin"]:
             st.markdown("---")
-            st.subheader(" Delete Dataset")
+            st.subheader("🗑️ Delete Dataset")
             dataset_ids = df_datasets['id'].tolist()
             selected_id = st.selectbox("Select dataset to delete", dataset_ids,
                                       format_func=lambda x: f"ID {x}: {df_datasets[df_datasets['id']==x]['name'].values[0]}")
             
-            if st.button(" Delete Selected Dataset", type="secondary"):
+            if st.button("🗑️ Delete Selected Dataset", type="secondary"):
                 try:
-                    if datasets_mod.delete_dataset(selected_id):
+                    # use OOP model to delete
+                    if dataset_model.delete(selected_id):
                         st.success(f"Deleted dataset {selected_id}")
                         st.rerun()
                     else:
@@ -166,18 +170,18 @@ def datasets_view(
     else:
         st.info("No datasets found.")
 
-    # AI Insights (Datasets) - NEW SECTION
+    # AI insights section
     if not df_datasets.empty and ai_insights_for:
         st.markdown("---")
         st.markdown("### 🤖 AI Analysis")
         
-        # Create dataset labels for dropdown
+        # create dataset labels for dropdown
         labels = [
             f"ID {r.get('id', 'N/A')}: {r.get('name', 'Unnamed')} ({r.get('rows', 0)} rows × {r.get('columns', 0)} cols)" 
             for _, r in df_datasets.iterrows()
         ]
         
-        # Selectbox to choose dataset
+        # selectbox to choose dataset
         sel_idx = st.selectbox(
             "Choose dataset for AI analysis", 
             options=list(range(len(labels))), 
@@ -185,14 +189,14 @@ def datasets_view(
             key="ai_dataset_select"
         )
         
-        # Get the selected dataset as a dictionary
+        # get the selected dataset as a dictionary
         selected_dataset = df_datasets.iloc[sel_idx].to_dict()
         
-        # Display dataset details
+        # display dataset details
         with st.expander("📋 Selected Dataset Details", expanded=False):
             st.write(selected_dataset)
         
-        # Button to generate AI insights
+        # button to generate AI insights
         if st.button("🧠 Generate AI Insights", key=f"ai_dataset_btn_{sel_idx}"):
             with st.spinner("🔍 Analyzing dataset with AI..."):
                 insights = ai_insights_for(selected_dataset, domain="Datasets")

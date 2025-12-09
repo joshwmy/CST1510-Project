@@ -20,38 +20,39 @@ import os
 from datetime import date
 from database.db import connect_database
 
-# we start by defining the allowed target tables to avoid accidental SQL injection via table names
+# define the allowed target tables to avoid accidental SQL injection via table names
 _ALLOWED_TABLES = {"cyber_incidents", "datasets_metadata", "it_tickets", "users"}
 
 
 def _validate_table_name(table_name: str):
+    """Check if table name is in allowed list; raises error if not"""
     if table_name not in _ALLOWED_TABLES:
         raise ValueError(f"Invalid table name: {table_name!r}. Allowed: {_ALLOWED_TABLES}")
 
 
 def _get_table_columns(conn: sqlite3.Connection, table_name: str) -> List[str]:
-    """Return list of column names for a sqlite table (in DB order)."""
+    """Return list of column names for a sqlite table in DB order"""
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(%s)" % table_name)  # table name safe after validation
     rows = cur.fetchall()
-    return [row[1] for row in rows]  # row[1] = column name
+    return [row[1] for row in rows]  # row[1] contains the column name
 
 
 def _normalize_date(raw: str) -> str:
-    """Try to normalize date strings to ISO format."""
+    """Try to normalize date strings to ISO format for consistency"""
     if not raw:
         return raw
     raw = raw.strip()
     
-    # Already looks like ISO date
+    # already looks like ISO date (YYYY-MM-DD)
     if len(raw) >= 10 and raw[4] == '-' and raw[7] == '-':
         return raw
     
-    # Try to parse common date formats
+    # try to parse common date formats
     import re
     from datetime import datetime
     
-    # Try various formats
+    # try various formats until one works
     formats = [
         '%Y-%m-%d %H:%M:%S',
         '%m/%d/%Y %H:%M:%S',
@@ -66,42 +67,42 @@ def _normalize_date(raw: str) -> str:
     for fmt in formats:
         try:
             dt = datetime.strptime(raw, fmt)
-            return dt.isoformat()
+            return dt.isoformat()       # convert to ISO format
         except ValueError:
-            continue
+            continue        # try next format
     
-    # If we can't parse it, return as-is
+    # if we cant parse it, return as-is
     return raw
 
 # --- coercion helpers ---
 
 def _coerce_value(col: str, raw: Optional[str]) -> Any:
-    """Coerce a raw CSV string into an appropriate Python type."""
+    """Coerce a raw CSV string into an appropriate Python type based on column name"""
     if raw is None:
         return None
     raw = raw.strip()
     if raw == "":
         return None
 
-    # known-int columns
+    # known-int columns; try to convert to integer
     if col in ("record_count", "rows", "columns"):
         try:
             return int(raw)
         except ValueError:
             try:
-                return int(float(raw))
+                return int(float(raw))      # handle numbers like "5.0"
             except Exception:
                 print(f"[csv_loader] Warning: could not convert {col}={raw!r} to int; leaving as text")
                 return raw
 
-    # date-like columns
+    # date-like columns; normalize to ISO format
     if col in ("created_date", "resolved_date", "last_updated", "upload_date", "date", "timestamp", "created_at"):
         normalized = _normalize_date(raw)
         if normalized != raw:
             return normalized
         return normalized
 
-    # default: return the cleaned string
+    # default: return the cleaned string as-is
     return raw
 
 def load_csv_to_table(csv_file_path: str,
@@ -110,8 +111,9 @@ def load_csv_to_table(csv_file_path: str,
                       clear_table: bool = True) -> int:
     """
     Load data from a CSV file into a SQLite table using a single transaction and executemany.
+    Returns number of rows loaded or 0 on error.
     """
-    _validate_table_name(table_name)
+    _validate_table_name(table_name)        # make sure table name is safe
     csv_path = Path(csv_file_path)
 
     if not csv_path.exists():
@@ -120,7 +122,7 @@ def load_csv_to_table(csv_file_path: str,
 
     conn = connect_database(db_path)
     try:
-        # fetch DB columns and verify
+        # fetch DB columns and verify they exist
         db_cols = _get_table_columns(conn, table_name)
         if not db_cols:
             raise ValueError(f"Table {table_name!r} has no columns or does not exist.")
@@ -132,21 +134,23 @@ def load_csv_to_table(csv_file_path: str,
                 print(f"[csv_loader] No header found in CSV: {csv_path}")
                 return 0
 
-            # keep columns in DB order, only those present in the CSV
+            # keep columns in DB order; only those present in the CSV
             insert_cols = [col for col in db_cols if col in csv_cols]
             if not insert_cols:
                 raise ValueError("No overlapping columns between CSV and table columns: "
                                  f"csv={csv_cols}, table={db_cols}")
 
+            # build INSERT query with placeholders
             placeholders = ", ".join(["?"] * len(insert_cols))
             col_list_sql = ", ".join(insert_cols)
             insert_sql = f"INSERT INTO {table_name} ({col_list_sql}) VALUES ({placeholders})"
 
             cur = conn.cursor()
             if clear_table:
-                cur.execute(f"DELETE FROM {table_name}")
+                cur.execute(f"DELETE FROM {table_name}")      # clear existing data
                 conn.commit()
 
+            # batch insert for better performance
             batch: List[Tuple] = []
             rows = 0
             for row in reader:
@@ -154,20 +158,20 @@ def load_csv_to_table(csv_file_path: str,
                 for c in insert_cols:
                     raw = row.get(c, None)
                     try:
-                        cleaned[c] = _coerce_value(c, raw)
+                        cleaned[c] = _coerce_value(c, raw)      # convert to appropriate type
                     except Exception as e:
                         print(f"[csv_loader] Warning: failed to coerce column {c} value {raw!r}: {e}")
-                        cleaned[c] = raw
+                        cleaned[c] = raw        # use raw value if coercion fails
 
                 values = tuple(cleaned[c] for c in insert_cols)
                 batch.append(values)
 
-                if len(batch) >= 500:
+                if len(batch) >= 500:       # insert in batches of 500 for performance
                     cur.executemany(insert_sql, batch)
                     rows += len(batch)
                     batch.clear()
 
-            if batch:
+            if batch:       # insert any remaining rows
                 cur.executemany(insert_sql, batch)
                 rows += len(batch)
 
@@ -187,12 +191,12 @@ def load_csv_to_table(csv_file_path: str,
         conn.close()
 
 def load_all_csv_data(data_dir: str = "DATA", db_path: Optional[str] = None, clear_table: bool = True):
-    """Load the expected CSVs into their respective tables.
-
-    Returns:
-        dict: mapping table_name -> rows_loaded
+    """
+    Load the expected CSVs into their respective tables.
+    Returns dict mapping table_name to rows_loaded.
     """
     data_dir = Path(data_dir)
+    # map table names to their CSV files
     mappings = {
         "cyber_incidents": data_dir / "cyber_incidents.csv",
         "datasets_metadata": data_dir / "datasets_metadata.csv",
@@ -212,7 +216,7 @@ def load_all_csv_data(data_dir: str = "DATA", db_path: Optional[str] = None, cle
     return results
 
 def count_table_records(table_name: str, db_path: Optional[str] = None) -> int:
-    """Returns the number of records in a table."""
+    """Returns the number of records in a table; useful for verification"""
     _validate_table_name(table_name)
     conn = connect_database(db_path)
     try:
@@ -226,19 +230,17 @@ def count_table_records(table_name: str, db_path: Optional[str] = None) -> int:
 # -------------------------
 # CSV Upload Handlers
 # -------------------------
-# -------------------------
-# CSV Upload Handlers - FIXED VERSION
-# -------------------------
+
 def handle_csv_upload(uploaded_file, domain: str, username: str):
     """
     Process uploaded CSV files for different domains.
-    Import modules HERE to avoid circular imports.
+    Imports modules locally to avoid circular dependencies.
     """
     try:
-        # Read the CSV file
+        # read the CSV file into pandas dataframe
         df = pd.read_csv(uploaded_file)
         
-        # Import modules locally to avoid circular dependency
+        # import modules locally to avoid circular dependency issues
         if domain == "Datasets":
             from models import datasets as datasets_mod
             return handle_dataset_upload(df, username, uploaded_file.name, datasets_mod)
@@ -256,9 +258,9 @@ def handle_csv_upload(uploaded_file, domain: str, username: str):
 
 
 def handle_dataset_upload(df, username, filename, datasets_mod):
-    """Create dataset entry from uploaded CSV."""
+    """Create dataset entry from uploaded CSV file"""
     try:
-        dataset_name = os.path.splitext(filename)[0]
+        dataset_name = os.path.splitext(filename)[0]        # use filename without extension as dataset name
         upload_date = date.today().isoformat()
 
         created = datasets_mod.create_dataset(
@@ -276,7 +278,7 @@ def handle_dataset_upload(df, username, filename, datasets_mod):
 
 
 def handle_incident_upload(df, username, filename, incidents_mod):
-    """Create incidents from uploaded CSV."""
+    """Create incidents from uploaded CSV; processes each row as a separate incident"""
     try:
         created_count = 0
         errors = []
@@ -294,25 +296,28 @@ def handle_incident_upload(df, username, filename, incidents_mod):
                 if new_id != -1:
                     created_count += 1
             except Exception as e:
-                errors.append(f"Row {idx}: {str(e)}")
+                errors.append(f"Row {idx}: {str(e)}")       # collect errors but continue processing
         
         message = f"Created {created_count} incidents from CSV"
         if errors:
-            message += f". Errors: {', '.join(errors[:3])}"
+            message += f". Errors: {', '.join(errors[:3])}"        # show first 3 errors only
         return True, message
     except Exception as e:
         return False, f"Error processing incidents: {str(e)}"
 
 
 def handle_ticket_upload(df, username, filename, tickets_mod):
-    """Create tickets from uploaded CSV."""
+    """Create tickets from uploaded CSV; processes each row as a separate ticket"""
     try:
         created_count = 0
         errors = []
         
         for idx, row in df.iterrows():
             try:
+                # generate unique ticket id using timestamp and row number
                 ticket_id = f"CSV-{int(time.time())}-{idx}"
+                
+                # get values from CSV with defaults for missing fields
                 priority = row.get('priority', 'Medium') or 'Medium'
                 status = row.get('status', 'Open') or 'Open'
                 category = row.get('category', 'General') or 'General'
@@ -338,24 +343,11 @@ def handle_ticket_upload(df, username, filename, tickets_mod):
                 else:
                     created_count += 1
             except Exception as e:
-                errors.append(f"Row {idx}: {str(e)}")
+                errors.append(f"Row {idx}: {str(e)}")       # collect errors but continue
 
         message = f"Created {created_count} tickets from CSV"
         if errors:
-            message += f". Errors: {', '.join(errors[:5])}"
+            message += f". Errors: {', '.join(errors[:5])}"        # show first 5 errors
         return True, message
     except Exception as e:
         return False, f"Error processing tickets: {str(e)}"
-    
-# THIS IS LEFTOVER TEST CODE; IGNORE
-# if __name__ == "__main__":
-#     # initialize schema if available
-#     try:
-#         from .schema import init_schema
-#         init_schema()
-#     except Exception:
-#         # schema may exist already; ignore errors here
-#         pass
-
-#     load_all_csv_data()
-#     verify_data_loading()

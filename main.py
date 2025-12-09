@@ -1,7 +1,7 @@
 # main.py
 """
 Streamlit app main router for Multi-Domain Intelligence Platform.
-FIXED: Admin panel now correctly appears in sidebar for admin users
+FIXED: Added debug output for import failures
 """
 import streamlit as st
 import pandas as pd
@@ -55,11 +55,17 @@ import_map = {
     "services.user_service": "user_service_mod",
 }
 
-# Perform imports
+# Perform imports WITH ERROR REPORTING
+import_errors = []
 for path, _ in candidates:
     obj, err = try_import(path)
     if obj:
         globals()[import_map[path]] = obj
+        print(f"✅ Loaded: {path}")  # debug output
+    else:
+        error_msg = f"Failed to load {path}: {err}"
+        import_errors.append(error_msg)
+        print(f"❌ {error_msg}")  # debug output
 
 # Try importing views and forms
 views_to_try = [
@@ -95,6 +101,9 @@ for module_path, attr in views_to_try:
             add_incident_form_func = obj
         elif attr == "ai_insights_for":
             ai_insights_for = obj
+        print(f"✅ Loaded: {module_path}.{attr}")
+    else:
+        print(f"⚠️ Could not load {module_path}.{attr}: {err}")
 
 # -------------------------
 # Page config & session setup
@@ -104,6 +113,14 @@ st.set_page_config(
     layout="wide", 
     initial_sidebar_state="expanded"
 )
+
+# Show import errors in UI if any critical modules failed
+if import_errors:
+    with st.sidebar:
+        with st.expander("⚠️ Import Issues", expanded=False):
+            for err in import_errors:
+                st.warning(err)
+            st.info("Some features may not work correctly")
 
 for k, default in [
     ("logged_in", False),
@@ -214,7 +231,7 @@ def show_home_page():
                 if st.button("Logout"):
                     try:
                         user_service_mod.invalidate_session(st.session_state.session_token)
-                    except Exception:
+                    except:
                         pass
                     st.session_state.logged_in = False
                     st.session_state.username = ""
@@ -222,42 +239,38 @@ def show_home_page():
                     st.session_state.user_role = "user"
                     st.rerun()
                 return
-        except Exception:
-            st.session_state.logged_in = False
-            st.session_state.username = ""
-            st.session_state.session_token = None
+        except:
+            pass
 
-    tab_login, tab_register = st.tabs(["Login", "Register"])
-    with tab_login:
+    tab1, tab2 = st.tabs(["Sign In", "Register"])
+
+    with tab1:
+        st.subheader("Sign In")
         login_username = st.text_input("Username", key="login_username")
         login_password = st.text_input("Password", type="password", key="login_password")
+
         if st.button("Sign In"):
-            if not login_username or not login_password:
-                st.error("Please enter both username and password.")
+            if not (login_username and login_password):
+                st.error("Both fields are required.")
             else:
                 try:
-                    if hasattr(user_service_mod, "is_account_locked") and user_service_mod.is_account_locked(login_username):
-                        st.error("Account temporarily locked.")
+                    result = user_service_mod.login_user(login_username, login_password)
+                    if result["success"]:
+                        st.session_state.logged_in = True
+                        st.session_state.username = login_username
+                        st.session_state.session_token = result["session_token"]
+                        user_info = result.get("user_data", {})
+                        st.session_state.user_role = user_info.get("role", "user")
+                        st.session_state.current_page = "dashboard"
+                        st.success("Login successful!")
+                        st.rerun()
                     else:
-                        status, role, token = user_service_mod.login_user(login_username, login_password)
-                        if status == "success":
-                            st.session_state.logged_in = True
-                            st.session_state.username = login_username
-                            st.session_state.user_role = role if role else "user"  # Ensure role is set
-                            st.session_state.session_token = token
-                            st.session_state.current_page = "dashboard"
-                            st.success(f"Login successful! Role: {st.session_state.user_role}")
-                            st.rerun()
-                        elif status == "wrong_password":
-                            st.error("Incorrect password.")
-                        elif status == "locked":
-                            st.error("Account locked.")
-                        else:
-                            st.error("Login failed.")
+                        st.error(result["message"])
                 except Exception as e:
                     st.error(f"Login error: {e}")
 
-    with tab_register:
+    with tab2:
+        st.subheader("Create Account")
         reg_username = st.text_input("Choose Username", key="reg_username")
         reg_password = st.text_input("Choose Password", type="password", key="reg_password")
         reg_confirm = st.text_input("Confirm Password", type="password", key="reg_confirm")
