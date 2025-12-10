@@ -246,12 +246,11 @@ If it doesn't open automatically, manually navigate to the URL shown in the term
 
 ### Admin Account
 - **Username:** `admin`
-- **Password:** (Use the registration form to create your admin account)
+- **Password:** `Password1!`
 
 ### For Testing
 You can create test accounts through the registration page.
 
-**⚠️ IMPORTANT:** Change default credentials immediately in production!
 
 ---
 
