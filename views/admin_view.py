@@ -1,7 +1,6 @@
 # views/admin_view.py
 """
 Admin panel for user management and system overview
-FIXED: Delete and unlock buttons now work properly
 """
 import streamlit as st
 from datetime import datetime
@@ -221,24 +220,29 @@ def show_system_overview(datasets_mod, incidents_mod, tickets_mod):
     
     if datasets_mod:
         try:
-            analytics = datasets_mod.get_all_analytics()
+            # datasets uses an instance method, not a module-level function
+            model = datasets_mod.DatasetModel()
+            analytics = model.get_analytics()
             total_datasets = analytics.get('total_datasets', 0)
-        except:
-            pass
+        except Exception as e:
+            print(f"[Admin] Error getting dataset analytics: {e}")
     
     if incidents_mod:
         try:
-            analytics = incidents_mod.get_all_incident_analytics()
+            # incidents uses an instance method, not a module-level function
+            model = incidents_mod.IncidentModel()
+            analytics = model.get_analytics()
             total_incidents = analytics.get('total_incidents', 0)
-        except:
-            pass
+        except Exception as e:
+            print(f"[Admin] Error getting incident analytics: {e}")
     
     if tickets_mod:
         try:
+            # tickets has a legacy function that works
             analytics = tickets_mod.get_all_ticket_analytics()
             total_tickets = analytics.get('total_tickets', 0)
-        except:
-            pass
+        except Exception as e:
+            print(f"[Admin] Error getting ticket analytics: {e}")
     
     # Display metrics
     col1, col2, col3 = st.columns(3)
@@ -247,7 +251,160 @@ def show_system_overview(datasets_mod, incidents_mod, tickets_mod):
     col3.metric("🎫 Total Tickets", total_tickets)
     
     st.markdown("---")
-    st.info("💡 Use the domain dashboards for detailed analytics and visualizations.")
+    
+    # visualizations section
+    st.subheader("📈 System Analytics")
+    
+    # import plotly for charts
+    try:
+        import plotly.graph_objects as go
+        import plotly.express as px
+        
+        # get full analytics data
+        datasets_analytics = {}
+        incidents_analytics = {}
+        tickets_analytics = {}
+        
+        if datasets_mod:
+            try:
+                model = datasets_mod.DatasetModel()
+                datasets_analytics = model.get_analytics()
+            except Exception as e:
+                st.warning(f"Datasets analytics error: {e}")
+        
+        if incidents_mod:
+            try:
+                model = incidents_mod.IncidentModel()
+                incidents_analytics = model.get_analytics()
+            except Exception as e:
+                st.warning(f"Incidents analytics error: {e}")
+        
+        if tickets_mod:
+            try:
+                tickets_analytics = tickets_mod.get_all_ticket_analytics()
+            except Exception as e:
+                st.warning(f"Tickets analytics error: {e}")
+        
+        # row 1: domain activity overview
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # domain distribution pie chart
+            domain_data = {
+                'Domain': ['Data Science', 'Cybersecurity', 'IT Service Desk'],
+                'Count': [total_datasets, total_incidents, total_tickets]
+            }
+            
+            fig_pie = px.pie(
+                domain_data,
+                values='Count',
+                names='Domain',
+                title='Domain Activity Distribution',
+                color_discrete_sequence=['#636EFA', '#EF553B', '#00CC96']
+            )
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col2:
+            # domain comparison bar chart
+            fig_bar = go.Figure(data=[
+                go.Bar(
+                    x=['Data Science', 'Cybersecurity', 'IT Service Desk'],
+                    y=[total_datasets, total_incidents, total_tickets],
+                    marker_color=['#636EFA', '#EF553B', '#00CC96'],
+                    text=[total_datasets, total_incidents, total_tickets],
+                    textposition='auto',
+                )
+            ])
+            fig_bar.update_layout(
+                title='Total Records by Domain',
+                xaxis_title='Domain',
+                yaxis_title='Count',
+                showlegend=False
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+        
+        # row 2: detailed breakdowns
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # incidents by severity
+            if incidents_analytics.get('by_severity'):
+                severity_data = incidents_analytics['by_severity']
+                # handle both capitalized (Low/Medium/High/Critical) and lowercase keys
+                fig_severity = px.bar(
+                    x=list(severity_data.keys()),
+                    y=list(severity_data.values()),
+                    title='Incidents by Severity',
+                    labels={'x': 'Severity', 'y': 'Count'},
+                    color=list(severity_data.keys()),
+                    color_discrete_map={
+                        'Critical': '#dc3545',
+                        'High': '#fd7e14',
+                        'Medium': '#ffc107',
+                        'Low': '#28a745',
+                        # also support lowercase
+                        'critical': '#dc3545',
+                        'high': '#fd7e14',
+                        'medium': '#ffc107',
+                        'low': '#28a745'
+                    }
+                )
+                st.plotly_chart(fig_severity, use_container_width=True)
+            else:
+                st.info("No incident data available")
+        
+        with col2:
+            # tickets by status
+            if tickets_analytics.get('by_status'):
+                status_data = tickets_analytics['by_status']
+                fig_status = px.pie(
+                    values=list(status_data.values()),
+                    names=list(status_data.keys()),
+                    title='Tickets by Status',
+                    color_discrete_sequence=px.colors.qualitative.Set3
+                )
+                st.plotly_chart(fig_status, use_container_width=True)
+            else:
+                st.info("No ticket data available")
+        
+        with col3:
+            # tickets by priority
+            if tickets_analytics.get('by_priority'):
+                priority_data = tickets_analytics['by_priority']
+                # handle both capitalized (Low/Medium/High/Critical) and lowercase keys
+                fig_priority = px.bar(
+                    x=list(priority_data.keys()),
+                    y=list(priority_data.values()),
+                    title='Tickets by Priority',
+                    labels={'x': 'Priority', 'y': 'Count'},
+                    color=list(priority_data.keys()),
+                    color_discrete_map={
+                        'Critical': '#dc3545',
+                        'High': '#fd7e14',
+                        'Medium': '#ffc107',
+                        'Low': '#28a745',
+                        # also support lowercase
+                        'critical': '#dc3545',
+                        'high': '#fd7e14',
+                        'medium': '#ffc107',
+                        'low': '#28a745'
+                    }
+                )
+                st.plotly_chart(fig_priority, use_container_width=True)
+            else:
+                st.info("No ticket data available")
+        
+    except ImportError as ie:
+        st.error(f"❌ Plotly not installed: {ie}")
+        st.info("Run: pip install plotly")
+    except Exception as e:
+        st.error(f"❌ Error creating visualizations: {type(e).__name__}: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+    
+    st.markdown("---")
+    st.info("💡 Use the domain dashboards for detailed analytics and insights.")
 
 
 def show_database_info(csv_loader_mod):

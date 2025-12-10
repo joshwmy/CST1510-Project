@@ -1,7 +1,6 @@
 # main.py
 """
-Streamlit app main router for Multi-Domain Intelligence Platform.
-FIXED: Added debug output for import failures
+Streamlit app main router for Multi-Domain Intelligence Platform.3
 """
 import streamlit as st
 import pandas as pd
@@ -254,18 +253,26 @@ def show_home_page():
                 st.error("Both fields are required.")
             else:
                 try:
-                    result = user_service_mod.login_user(login_username, login_password)
-                    if result["success"]:
+                    # FIXED: login_user returns (status, role, token) tuple, not dict
+                    status, role, token = user_service_mod.login_user(login_username, login_password)
+                    
+                    if status == "success":
                         st.session_state.logged_in = True
                         st.session_state.username = login_username
-                        st.session_state.session_token = result["session_token"]
-                        user_info = result.get("user_data", {})
-                        st.session_state.user_role = user_info.get("role", "user")
+                        st.session_state.session_token = token
+                        st.session_state.user_role = role
                         st.session_state.current_page = "dashboard"
                         st.success("Login successful!")
                         st.rerun()
+                    elif status == "locked":
+                        st.error("Account is locked. Please try again later.")
+                    elif status == "wrong_password":
+                        st.error("Invalid username or password.")
+                    elif status == "user_not_found":
+                        st.error("Invalid username or password.")
                     else:
-                        st.error(result["message"])
+                        st.error(f"Login failed: {status}")
+                        
                 except Exception as e:
                     st.error(f"Login error: {e}")
 
@@ -328,22 +335,6 @@ def show_dashboard():
     domain = st.session_state.current_domain
     st.title(f"{domain} Dashboard")
     st.caption(f"Welcome, {st.session_state.username} (Role: {st.session_state.user_role})")
-
-    # Logout button
-    _, _, c = st.columns([8, 1, 1])
-    with c:
-        if st.button("Logout"):
-            try:
-                if user_service_mod and st.session_state.session_token:
-                    user_service_mod.invalidate_session(st.session_state.session_token)
-            except Exception:
-                pass
-            st.session_state.logged_in = False
-            st.session_state.username = ""
-            st.session_state.session_token = None
-            st.session_state.user_role = "user"
-            st.session_state.current_page = "home"
-            st.rerun()
 
     # Route to domain view
     try:

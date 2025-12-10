@@ -1,6 +1,6 @@
 # pages/cybersecurity_view.py
 """
-Cybersecurity view - NO top-level imports of other project modules.
+Cybersecurity view
 Everything passed as parameters to avoid circular imports.
 """
 import streamlit as st
@@ -192,10 +192,6 @@ def cybersecurity_view(
         
         # get the selected incident as a dictionary
         selected_incident = df_inc.iloc[sel_idx].to_dict()
-        
-        # display incident details
-        with st.expander("📋 Selected Incident Details", expanded=False):
-            st.write(selected_incident)
         
         # button to generate AI insights
         if st.button("🧠 Generate AI Insights", key=f"ai_incident_btn_{sel_idx}"):

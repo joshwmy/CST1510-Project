@@ -14,7 +14,7 @@ The platform provides secure authentication, role-based access control, domain-s
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 ### Authentication & Security
 - ✅ Bcrypt password hashing

@@ -1,6 +1,6 @@
 # pages/tickets_view.py
 """
-IT Tickets view - NO top-level imports of other project modules.
+IT Tickets view 
 Everything passed as parameters to avoid circular imports.
 """
 import streamlit as st
@@ -227,10 +227,6 @@ def tickets_view(
         
         # get the selected ticket as a dictionary
         selected_ticket = df_tickets.iloc[sel_idx].to_dict()
-        
-        # display ticket details
-        with st.expander("📋 Selected Ticket Details", expanded=False):
-            st.write(selected_ticket)
         
         # button to generate AI insights
         if st.button("🧠 Generate AI Insights", key=f"ai_ticket_btn_{sel_idx}"):

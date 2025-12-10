@@ -1,6 +1,6 @@
 # pages/datasets_view.py
 """
-Datasets view - NO top-level imports of other project modules.
+Datasets view
 Everything passed as parameters to avoid circular imports.
 """
 import streamlit as st
@@ -191,10 +191,6 @@ def datasets_view(
         
         # get the selected dataset as a dictionary
         selected_dataset = df_datasets.iloc[sel_idx].to_dict()
-        
-        # display dataset details
-        with st.expander("📋 Selected Dataset Details", expanded=False):
-            st.write(selected_dataset)
         
         # button to generate AI insights
         if st.button("🧠 Generate AI Insights", key=f"ai_dataset_btn_{sel_idx}"):
