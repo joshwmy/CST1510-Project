@@ -22,6 +22,8 @@ The platform provides secure authentication, role-based access control, domain-s
 - ✅ Session-based authentication with expiration
 - ✅ Role-based access control (RBAC)
 - ✅ Admin panel for user management
+- ✅ Password strength check during registration
+
 
 ### Cybersecurity Module
 - 🔒 Load and explore security incidents
@@ -41,6 +43,54 @@ The platform provides secure authentication, role-based access control, domain-s
 - 🔎 Dataset exploration tools
 - 🤖 AI-powered data insights
 
+## 🏗️ Architecture
+
+### Object-Oriented Design
+The platform uses a comprehensive OOP architecture with:
+
+- **Base Classes**: `BaseModel`, `BaseAnalytics`, `ValidationMixin`
+  - Common CRUD operations inherited by all models
+  - Shared analytics methods across domains
+  - Reusable validation logic
+
+- **Domain Models**: `DatasetModel`, `IncidentModel`, `TicketModel`
+  - Full CRUD with domain-specific validation
+  - Built-in analytics and filtering
+  - Multiple inheritance for rich functionality
+
+- **AI Assistants**: `CybersecurityAssistant`, `ITTicketAssistant`, `DatasetAssistant`
+  - Domain-specific prompt engineering
+  - Lazy model initialization
+  - Factory pattern for assistant creation
+
+- **MVC Pattern**: Clean separation of concerns
+  - Models: Data and business logic
+  - Views: UI components
+  - Services: Authentication, AI integration
+
+### Technical Implementation
+- ✅ **Object-Oriented Programming** - Complete OOP refactoring with inheritance
+- ✅ **MVC Architecture** - Proper separation of models, views, and services
+- ✅ **Google Gemini 2.0 Flash (Experimental)** - AI-powered domain insights
+- ✅ **SQLite with Row Factory** - Dict-like database access
+- ✅ **Session-based Authentication** - Token management with expiration
+
+## 💾 Database Schema
+
+The platform uses SQLite with the following tables:
+
+- **users** - User accounts with role-based access control and account locking (3 failed attempts = 15min lock)
+- **datasets_metadata** - Dataset tracking with uploader and size information
+- **cyber_incidents** - Security incidents with severity and status tracking
+- **it_tickets** - IT support tickets with priority and assignment
+- **sessions** - Session tokens with automatic expiration (24 hours default)
+
+All models implement:
+- Create, Read, Update, Delete (CRUD) operations
+- Advanced filtering and search
+- Analytics and aggregations
+- Data validation before insertion
+
 ---
 
 ## 📁 Project Structure
@@ -49,13 +99,13 @@ CST1510 CW2/
 │
 ├── .streamlit/
 │   ├── config.toml          # Streamlit UI configuration
-│   └── secrets.toml         # API keys (DO NOT COMMIT!)
+│   └── secrets.toml         # API key (this was an old commit; key is not in use anymore)
 │
 ├── DATA/
 │   ├── cyber_incidents.csv  # Sample cybersecurity data
 │   ├── datasets_metadata.csv
 │   ├── it_tickets.csv       # Sample IT tickets
-│   ├── users.txt            # User credentials (DO NOT COMMIT!)
+│   ├── users.txt            # User credentials (OLD)
 │   └── intelligence_platform.db  # SQLite database
 │
 ├── database/
@@ -63,6 +113,7 @@ CST1510 CW2/
 │   └── schema.py           # Database schema definitions
 │
 ├── models/
+│   ├── base_model.py       # basic parent class for OOP
 │   ├── csv_loader.py       # CSV import utilities
 │   ├── datasets.py         # Dataset CRUD operations
 │   ├── incidents.py        # Incident management
@@ -460,6 +511,7 @@ For issues or questions:
 - Google for Gemini AI API
 - Course instructors and teaching assistants
 - Open source community
+- ChatGPT for code generation 
 
 ---
 
