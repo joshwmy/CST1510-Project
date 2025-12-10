@@ -154,8 +154,8 @@ CST1510 CW2/
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/intelligence-platform.git
-cd intelligence-platform
+git clone https://github.com/joshwmy/CST1510-Project.git
+cd CST1510-Project
 ```
 
 ---
