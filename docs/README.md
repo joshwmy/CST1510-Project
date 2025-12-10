@@ -452,22 +452,12 @@ Core dependencies (see `requirements.txt` for full list):
 - `google-generativeai` - AI insights
 - `python-dotenv` - Environment variable management
 
----
-
-## 🤝 Contributing
-
-This is a student project for CST1510. For improvements:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
 
 ---
 
 ## 📝 Development Notes
 
-### Adding New Features
+### Adding New Features (How-To)
 
 1. **New Domain**: Add module in `models/`, view in `views/`, update `main.py`
 2. **New Role**: Update `user_service.py` RBAC functions
