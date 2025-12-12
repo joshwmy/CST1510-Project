@@ -280,8 +280,19 @@ def show_home_page():
         st.subheader("Create Account")
         reg_username = st.text_input("Choose Username", key="reg_username")
         reg_password = st.text_input("Choose Password", type="password", key="reg_password")
+        
+        # show password strength in real-time
+        if reg_password and user_service_mod:
+            strength = user_service_mod.check_password_strength(reg_password)
+            if strength == "Weak":
+                st.error(f" Password Strength: {strength}")
+            elif strength == "Medium":
+                st.warning(f" Password Strength: {strength}")
+            else:  # Strong
+                st.success(f" Password Strength: {strength}")
+        
         reg_confirm = st.text_input("Confirm Password", type="password", key="reg_confirm")
-
+        
         st.markdown("**Password Requirements:** 8-50 chars, 1 uppercase, 1 number, 1 special char")
         if st.button("Create Account"):
             if not (reg_username and reg_password and reg_confirm):
